@@ -27,6 +27,10 @@ go vet ./...
 
 Go 1.26.2 is managed via mise (see `mise.toml`).
 
+### Releases & container
+
+Versioning is [SemVer](https://semver.org), automated via [release-please](https://github.com/googleapis/release-please) — push [conventional commits](https://www.conventionalcommits.org) (`feat:`, `fix:`, `feat!:`) to `main` and a release PR appears. Merging it tags `vX.Y.Z`, which triggers `.github/workflows/publish.yml` to build and push a multi-arch image to `ghcr.io/nabkey/mcp-home`. The version is injected into the binary via `-ldflags "-X main.version=..."` and surfaced by the `--version` (`-V`) flag. `cloudflared` is bundled in the image.
+
 ### Configuration
 
 All config is via environment variables (or CLI flags). Uses [Kong](https://github.com/alecthomas/kong) with `envprefix` tags — run `go run ./cmd/mcp-server --help` to see all flags with their env var names.

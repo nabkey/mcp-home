@@ -24,14 +24,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	var cli config.CLI
 	kong.Parse(&cli,
 		kong.Name("mcp-server"),
 		kong.Description("MCP server for smart home and media management, served via Cloudflare Tunnel."),
+		kong.Vars{"version": version},
 	)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger.Info("mcp-server starting", "version", version)
 
 	if err := run(cli, logger); err != nil {
 		log.Fatal(err)

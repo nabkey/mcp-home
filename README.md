@@ -60,6 +60,25 @@ All configuration is via environment variables (see `.env.example`) or CLI flags
 
 Pass `--insecure` to disable authentication for local development.
 
+### Docker
+
+Prebuilt multi-arch images are published to GitHub Container Registry:
+
+```bash
+docker run --rm --env-file .env ghcr.io/nabkey/mcp-home:latest
+```
+
+Tags:
+- `latest` — tip of `main`
+- `vX.Y.Z`, `vX.Y` — semver releases
+- `main`, `sha-<short>` — branch / commit pins
+
+The image bundles `cloudflared`, so no runtime download is needed. Build locally with `docker build -t mcp-home .`.
+
+## Releases
+
+Versioning follows [SemVer](https://semver.org). Releases are automated by [release-please](https://github.com/googleapis/release-please): push [conventional commits](https://www.conventionalcommits.org) (`feat:`, `fix:`, `feat!:`, etc.) to `main` and a release PR will be opened/updated automatically. Merging it creates the `vX.Y.Z` tag, which triggers the container publish workflow. The resolved version is baked into the binary — check with `mcp-server --version`.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for the full security model, including the authentication flow, defense layers, and threat considerations.

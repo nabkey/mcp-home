@@ -4,6 +4,8 @@ package config
 import (
 	"fmt"
 	"sort"
+
+	"github.com/alecthomas/kong"
 )
 
 // CLI is the root configuration struct, parsed by Kong.
@@ -15,6 +17,7 @@ type CLI struct {
 	Sonarr     SonarrConfig     `embed:"" prefix:"sonarr-"  envprefix:"SONARR_"`
 	Radarr     RadarrConfig     `embed:"" prefix:"radarr-"  envprefix:"RADARR_"`
 	Frigate    FrigateConfig    `embed:"" prefix:"frigate-" envprefix:"FRIGATE_"`
+	Version    kong.VersionFlag `short:"V" help:"Print version and exit."`
 }
 
 // AfterApply is called by Kong after all values are resolved.
