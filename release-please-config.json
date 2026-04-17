@@ -5,6 +5,7 @@
       "release-type": "go",
       "package-name": "mcp-home",
       "include-v-in-tag": true,
+      "include-component-in-tag": false,
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "changelog-sections": [
