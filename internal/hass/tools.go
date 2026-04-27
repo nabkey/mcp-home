@@ -35,6 +35,7 @@ func (t *Tools) Register(server *mcp.Server) {
 	t.registerGetTodoItems(server)
 	t.registerManageAutomations(server)
 	t.registerGetAutomationTraces(server)
+	t.registerManageHelpers(server)
 }
 
 // --- get_home_states ---
@@ -293,5 +294,78 @@ func (t *Tools) registerGetAutomationTraces(server *mcp.Server) {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
 		return mcputil.JSONResult(map[string]any{"traces": traces})
+	})
+}
+
+// --- manage_helpers ---
+
+type manageHelpersArgs struct {
+	Action     string         `json:"action" jsonschema:"Action: list create update delete"`
+	HelperType string         `json:"helper_type" jsonschema:"Helper domain: input_boolean input_button input_datetime input_number input_select input_text counter timer schedule"`
+	HelperID   string         `json:"helper_id,omitempty" jsonschema:"Helper storage id without domain prefix (e.g. my_toggle not input_boolean.my_toggle). Required for update and delete."`
+	Config     map[string]any `json:"config,omitempty" jsonschema:"Helper configuration (for create/update). Common fields: name icon. Type-specific fields vary (e.g. input_number takes min max step; input_select takes options; timer takes duration)."`
+}
+
+func (t *Tools) registerManageHelpers(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "manage_helpers",
+		Description: "Manage Home Assistant helpers (input_boolean, input_button, input_datetime, input_number, input_select, input_text, counter, timer, schedule). List, create, update, or delete helpers.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageHelpersArgs) (*mcp.CallToolResult, any, error) {
+		if args.HelperType == "" {
+			return mcputil.TextResult("Error: helper_type is required"), nil, nil
+		}
+		if !IsHelperType(args.HelperType) {
+			return mcputil.TextResult(fmt.Sprintf("Error: unsupported helper_type %q (use one of: %s)", args.HelperType, strings.Join(HelperTypes, ", "))), nil, nil
+		}
+
+		wsClient := t.client.NewWebsocketClient()
+		if err := wsClient.Dial(); err != nil {
+			return mcputil.Errorf("connecting: %v", err), nil, nil
+		}
+		defer func() { _ = wsClient.Close() }()
+
+		switch args.Action {
+		case "list":
+			helpers, err := wsClient.ListHelpers(args.HelperType)
+			if err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			return mcputil.JSONResult(map[string]any{"helpers": helpers, "count": len(helpers)})
+
+		case "create":
+			if args.Config == nil {
+				return mcputil.TextResult("Error: config is required for create"), nil, nil
+			}
+			resp, err := wsClient.CreateHelper(args.HelperType, args.Config)
+			if err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			return mcputil.JSONResult(map[string]any{"helper": resp, "status": "created"})
+
+		case "update":
+			if args.HelperID == "" {
+				return mcputil.TextResult("Error: helper_id is required for update"), nil, nil
+			}
+			if args.Config == nil {
+				return mcputil.TextResult("Error: config is required for update"), nil, nil
+			}
+			resp, err := wsClient.UpdateHelper(args.HelperType, args.HelperID, args.Config)
+			if err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			return mcputil.JSONResult(map[string]any{"helper": resp, "status": "updated"})
+
+		case "delete":
+			if args.HelperID == "" {
+				return mcputil.TextResult("Error: helper_id is required for delete"), nil, nil
+			}
+			if err := wsClient.DeleteHelper(args.HelperType, args.HelperID); err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			return mcputil.JSONResult(map[string]any{"status": "deleted"})
+
+		default:
+			return mcputil.TextResult(fmt.Sprintf("Unknown action: %s (use list, create, update, delete)", args.Action)), nil, nil
+		}
 	})
 }
