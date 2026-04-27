@@ -125,6 +125,7 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `get_todo_items` | Retrieve items from a todo list entity |
 | `manage_automations` | CRUD operations on automations |
 | `get_automation_traces` | Debug automation execution history via WebSocket |
+| `manage_helpers` | CRUD operations on helpers (input_boolean, input_number, input_text, input_select, input_datetime, input_button, counter, timer, schedule) |
 
 **Lists** (requires HA):
 

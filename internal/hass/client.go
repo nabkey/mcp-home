@@ -463,6 +463,166 @@ func (c *WebsocketClient) TraceList(domain, itemID string) ([]map[string]any, er
 	return traces, nil
 }
 
+// HelperTypes lists the Home Assistant helper domains supported by the
+// storage-collection WebSocket API.
+var HelperTypes = []string{
+	"input_boolean",
+	"input_button",
+	"input_datetime",
+	"input_number",
+	"input_select",
+	"input_text",
+	"counter",
+	"timer",
+	"schedule",
+}
+
+// IsHelperType reports whether t is a supported helper domain.
+func IsHelperType(t string) bool {
+	for _, h := range HelperTypes {
+		if h == t {
+			return true
+		}
+	}
+	return false
+}
+
+// ListHelpers returns all configured helpers of the given type.
+func (c *WebsocketClient) ListHelpers(helperType string) ([]map[string]any, error) {
+	if !IsHelperType(helperType) {
+		return nil, fmt.Errorf("unsupported helper type: %s", helperType)
+	}
+
+	id := c.nextID()
+	req := map[string]any{
+		"id":   id,
+		"type": helperType + "/list",
+	}
+
+	if err := c.conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("failed to send %s/list request: %w", helperType, err)
+	}
+
+	resp, err := c.readResponse(id)
+	if err != nil {
+		return nil, fmt.Errorf("%s/list: %w", helperType, err)
+	}
+
+	result, ok := resp["result"].([]any)
+	if !ok {
+		return []map[string]any{}, nil
+	}
+
+	helpers := make([]map[string]any, 0, len(result))
+	for _, r := range result {
+		if m, ok := r.(map[string]any); ok {
+			helpers = append(helpers, m)
+		}
+	}
+	return helpers, nil
+}
+
+// CreateHelper creates a new helper of the given type. The config map should
+// contain helper-specific fields (e.g. "name", "icon", and any type-specific
+// settings); "type" is set automatically.
+func (c *WebsocketClient) CreateHelper(helperType string, config map[string]any) (map[string]any, error) {
+	if !IsHelperType(helperType) {
+		return nil, fmt.Errorf("unsupported helper type: %s", helperType)
+	}
+
+	id := c.nextID()
+	req := map[string]any{
+		"id":   id,
+		"type": helperType + "/create",
+	}
+	for k, v := range config {
+		if k == "id" || k == "type" {
+			continue
+		}
+		req[k] = v
+	}
+
+	if err := c.conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("failed to send %s/create request: %w", helperType, err)
+	}
+
+	resp, err := c.readResponse(id)
+	if err != nil {
+		return nil, fmt.Errorf("%s/create: %w", helperType, err)
+	}
+
+	if result, ok := resp["result"].(map[string]any); ok {
+		return result, nil
+	}
+	return map[string]any{}, nil
+}
+
+// UpdateHelper updates an existing helper. helperID is the helper's storage ID
+// (without the domain prefix, e.g. "my_toggle" not "input_boolean.my_toggle").
+func (c *WebsocketClient) UpdateHelper(helperType, helperID string, config map[string]any) (map[string]any, error) {
+	if !IsHelperType(helperType) {
+		return nil, fmt.Errorf("unsupported helper type: %s", helperType)
+	}
+	if err := validate.Identifier("helper id", helperID); err != nil {
+		return nil, err
+	}
+
+	id := c.nextID()
+	idField := helperType + "_id"
+	req := map[string]any{
+		"id":    id,
+		"type":  helperType + "/update",
+		idField: helperID,
+	}
+	for k, v := range config {
+		if k == "id" || k == "type" || k == idField {
+			continue
+		}
+		req[k] = v
+	}
+
+	if err := c.conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("failed to send %s/update request: %w", helperType, err)
+	}
+
+	resp, err := c.readResponse(id)
+	if err != nil {
+		return nil, fmt.Errorf("%s/update: %w", helperType, err)
+	}
+
+	if result, ok := resp["result"].(map[string]any); ok {
+		return result, nil
+	}
+	return map[string]any{}, nil
+}
+
+// DeleteHelper deletes a helper. helperID is the helper's storage ID
+// (without the domain prefix).
+func (c *WebsocketClient) DeleteHelper(helperType, helperID string) error {
+	if !IsHelperType(helperType) {
+		return fmt.Errorf("unsupported helper type: %s", helperType)
+	}
+	if err := validate.Identifier("helper id", helperID); err != nil {
+		return err
+	}
+
+	id := c.nextID()
+	req := map[string]any{
+		"id":               id,
+		"type":             helperType + "/delete",
+		helperType + "_id": helperID,
+	}
+
+	if err := c.conn.WriteJSON(req); err != nil {
+		return fmt.Errorf("failed to send %s/delete request: %w", helperType, err)
+	}
+
+	if _, err := c.readResponse(id); err != nil {
+		return fmt.Errorf("%s/delete: %w", helperType, err)
+	}
+	return nil
+}
+
 // TraceGet returns full details for a specific trace.
 func (c *WebsocketClient) TraceGet(domain, itemID, runID string) (map[string]any, error) {
 	id := c.nextID()
