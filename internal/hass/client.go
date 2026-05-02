@@ -360,6 +360,178 @@ func (c *Client) DeleteScript(ctx context.Context, objectID string) error {
 	return err
 }
 
+// CreateScene creates a new scene.
+func (c *Client) CreateScene(ctx context.Context, objectID string, config map[string]any) (map[string]any, error) {
+	if err := validate.Identifier("scene id", objectID); err != nil {
+		return nil, err
+	}
+
+	path := fmt.Sprintf("/api/config/scene/config/%s", objectID)
+	body, err := c.doRequest(ctx, "POST", path, nil, config)
+	if err != nil {
+		return nil, err
+	}
+
+	var response map[string]any
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &response); err != nil {
+			return map[string]any{"status": "ok", "id": objectID}, nil
+		}
+	} else {
+		return map[string]any{"status": "ok", "id": objectID}, nil
+	}
+	return response, nil
+}
+
+// UpdateScene updates an existing scene identified by its object_id.
+func (c *Client) UpdateScene(ctx context.Context, objectID string, config map[string]any) (map[string]any, error) {
+	if err := validate.Identifier("scene id", objectID); err != nil {
+		return nil, err
+	}
+
+	path := fmt.Sprintf("/api/config/scene/config/%s", objectID)
+	body, err := c.doRequest(ctx, "POST", path, nil, config)
+	if err != nil {
+		return nil, err
+	}
+
+	var response map[string]any
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &response); err != nil {
+			return map[string]any{"status": "ok", "id": objectID}, nil
+		}
+	} else {
+		return map[string]any{"status": "ok", "id": objectID}, nil
+	}
+	return response, nil
+}
+
+// DeleteScene deletes a scene identified by its object_id.
+func (c *Client) DeleteScene(ctx context.Context, objectID string) error {
+	if err := validate.Identifier("scene id", objectID); err != nil {
+		return err
+	}
+	_, err := c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/config/scene/config/%s", objectID), nil, nil)
+	return err
+}
+
+// GetServices retrieves the list of available services per domain.
+// The response is an array of {domain, services} objects; this method returns it as []map[string]any.
+func (c *Client) GetServices(ctx context.Context) ([]map[string]any, error) {
+	body, err := c.doRequest(ctx, "GET", "/api/services", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var services []map[string]any
+	if err := json.Unmarshal(body, &services); err != nil {
+		return nil, fmt.Errorf("failed to parse services: %w", err)
+	}
+	return services, nil
+}
+
+// GetHistory retrieves state history for the given entity IDs over the given window.
+// Returns an array of arrays — one inner array of state points per entity.
+func (c *Client) GetHistory(ctx context.Context, since, end time.Time, entityIDs []string, minimalResponse, significantOnly bool) ([][]map[string]any, error) {
+	path := fmt.Sprintf("/api/history/period/%s", since.UTC().Format(time.RFC3339))
+
+	query := url.Values{}
+	if !end.IsZero() {
+		query.Set("end_time", end.UTC().Format(time.RFC3339))
+	}
+	if len(entityIDs) > 0 {
+		query.Set("filter_entity_id", strings.Join(entityIDs, ","))
+	}
+	if minimalResponse {
+		query.Set("minimal_response", "")
+	}
+	if significantOnly {
+		query.Set("significant_changes_only", "")
+	}
+
+	body, err := c.doRequest(ctx, "GET", path, query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var history [][]map[string]any
+	if err := json.Unmarshal(body, &history); err != nil {
+		return nil, fmt.Errorf("failed to parse history: %w", err)
+	}
+	return history, nil
+}
+
+// RenderTemplate evaluates a Jinja2 template against Home Assistant state.
+// Optional variables map is passed through if non-nil.
+func (c *Client) RenderTemplate(ctx context.Context, template string, variables map[string]any) (string, error) {
+	if template == "" {
+		return "", fmt.Errorf("template is required")
+	}
+	payload := map[string]any{"template": template}
+	if len(variables) > 0 {
+		payload["variables"] = variables
+	}
+	body, err := c.doRequest(ctx, "POST", "/api/template", nil, payload)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+// CalendarEntity is the metadata returned by GET /api/calendars.
+type CalendarEntity struct {
+	EntityID string `json:"entity_id"`
+	Name     string `json:"name,omitempty"`
+}
+
+// CalendarEvent represents a single event from a calendar entity.
+type CalendarEvent struct {
+	Summary     string         `json:"summary"`
+	Start       map[string]any `json:"start,omitempty"`
+	End         map[string]any `json:"end,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Location    string         `json:"location,omitempty"`
+	UID         string         `json:"uid,omitempty"`
+	RecurrenceID string        `json:"recurrence_id,omitempty"`
+}
+
+// GetCalendars returns the list of calendar entities.
+func (c *Client) GetCalendars(ctx context.Context) ([]CalendarEntity, error) {
+	body, err := c.doRequest(ctx, "GET", "/api/calendars", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var calendars []CalendarEntity
+	if err := json.Unmarshal(body, &calendars); err != nil {
+		return nil, fmt.Errorf("failed to parse calendars: %w", err)
+	}
+	return calendars, nil
+}
+
+// GetCalendarEvents returns events for a calendar entity in [start, end].
+func (c *Client) GetCalendarEvents(ctx context.Context, entityID string, start, end time.Time) ([]CalendarEvent, error) {
+	if err := validate.Identifier("calendar entity_id", entityID); err != nil {
+		return nil, err
+	}
+	if start.IsZero() || end.IsZero() {
+		return nil, fmt.Errorf("start and end are required")
+	}
+
+	query := url.Values{}
+	query.Set("start", start.UTC().Format(time.RFC3339))
+	query.Set("end", end.UTC().Format(time.RFC3339))
+
+	body, err := c.doRequest(ctx, "GET", fmt.Sprintf("/api/calendars/%s", entityID), query, nil)
+	if err != nil {
+		return nil, err
+	}
+	var events []CalendarEvent
+	if err := json.Unmarshal(body, &events); err != nil {
+		return nil, fmt.Errorf("failed to parse calendar events: %w", err)
+	}
+	return events, nil
+}
+
 // BaseURL returns the client's base URL.
 func (c *Client) BaseURL() string { return c.baseURL }
 
@@ -703,6 +875,111 @@ func (c *WebsocketClient) DeleteHelper(helperType, helperID string) error {
 		return fmt.Errorf("%s/delete: %w", helperType, err)
 	}
 	return nil
+}
+
+// listResultMaps sends a WebSocket command that returns an array of objects and decodes the result.
+func (c *WebsocketClient) listResultMaps(commandType string) ([]map[string]any, error) {
+	id := c.nextID()
+	if err := c.conn.WriteJSON(map[string]any{"id": id, "type": commandType}); err != nil {
+		return nil, fmt.Errorf("failed to send %s request: %w", commandType, err)
+	}
+	resp, err := c.readResponse(id)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", commandType, err)
+	}
+	result, ok := resp["result"].([]any)
+	if !ok {
+		return []map[string]any{}, nil
+	}
+	out := make([]map[string]any, 0, len(result))
+	for _, r := range result {
+		if m, ok := r.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// ListAreas returns all configured areas from the area registry.
+func (c *WebsocketClient) ListAreas() ([]map[string]any, error) {
+	return c.listResultMaps("config/area_registry/list")
+}
+
+// ListDevices returns all configured devices from the device registry.
+func (c *WebsocketClient) ListDevices() ([]map[string]any, error) {
+	return c.listResultMaps("config/device_registry/list")
+}
+
+// ListEntityRegistry returns all entity registry entries (with name, area_id, device_id, labels, etc).
+func (c *WebsocketClient) ListEntityRegistry() ([]map[string]any, error) {
+	return c.listResultMaps("config/entity_registry/list")
+}
+
+// ListLabels returns all labels from the label registry.
+func (c *WebsocketClient) ListLabels() ([]map[string]any, error) {
+	return c.listResultMaps("config/label_registry/list")
+}
+
+// ListFloors returns all floors from the floor registry.
+func (c *WebsocketClient) ListFloors() ([]map[string]any, error) {
+	return c.listResultMaps("config/floor_registry/list")
+}
+
+// GetSceneConfig retrieves the raw configuration for a specific scene via WebSocket.
+func (c *WebsocketClient) GetSceneConfig(entityID string) (map[string]any, error) {
+	id := c.nextID()
+	req := map[string]any{
+		"id":        id,
+		"type":      "scene/config",
+		"entity_id": entityID,
+	}
+	if err := c.conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("failed to send scene/config request: %w", err)
+	}
+	resp, err := c.readResponse(id)
+	if err != nil {
+		return nil, fmt.Errorf("scene/config: %w", err)
+	}
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected scene/config result format")
+	}
+	return result, nil
+}
+
+// StatisticsDuringPeriod returns long-term statistics for the given statistic_ids in [start, end].
+// period must be one of "5minute", "hour", "day", "week", "month".
+// Result is keyed by statistic_id.
+func (c *WebsocketClient) StatisticsDuringPeriod(start, end time.Time, statisticIDs []string, period string) (map[string]any, error) {
+	if len(statisticIDs) == 0 {
+		return nil, fmt.Errorf("statistic_ids are required")
+	}
+	if period == "" {
+		period = "hour"
+	}
+	id := c.nextID()
+	req := map[string]any{
+		"id":            id,
+		"type":          "recorder/statistics_during_period",
+		"start_time":    start.UTC().Format(time.RFC3339),
+		"statistic_ids": statisticIDs,
+		"period":        period,
+	}
+	if !end.IsZero() {
+		req["end_time"] = end.UTC().Format(time.RFC3339)
+	}
+	if err := c.conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("failed to send recorder/statistics_during_period request: %w", err)
+	}
+	resp, err := c.readResponse(id)
+	if err != nil {
+		return nil, fmt.Errorf("recorder/statistics_during_period: %w", err)
+	}
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		return map[string]any{}, nil
+	}
+	return result, nil
 }
 
 // TraceGet returns full details for a specific trace.

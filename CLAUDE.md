@@ -96,7 +96,7 @@ Tools use the go-sdk generic `mcp.AddTool[In, Out]` pattern:
 
 Each integration has its own client that handles HTTP/WebSocket communication:
 
-- **Home Assistant** (`HASS_URL`, `HASS_TOKEN`) — REST API with Bearer token auth + WebSocket for automation config/traces. Two-step WS auth handshake (`auth_required` → `auth` → `auth_ok`).
+- **Home Assistant** (`HASS_URL`, `HASS_TOKEN`) — REST API with Bearer token auth + WebSocket for automation/script/scene config, traces, registries (areas/devices/entities/labels/floors), and long-term statistics. Two-step WS auth handshake (`auth_required` → `auth` → `auth_ok`).
 - **Sonarr** (`SONARR_URL`, `SONARR_API_KEY`) — `/api/v3/` endpoints, `X-Api-Key` header auth.
 - **Radarr** (`RADARR_URL`, `RADARR_API_KEY`) — Same *arr API pattern as Sonarr.
 - **Frigate** (`FRIGATE_URL`) — No auth, REST API for config, events, and JPEG snapshots.
@@ -127,6 +127,13 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `get_automation_traces` | Debug automation execution history via WebSocket |
 | `manage_helpers` | CRUD operations on helpers (input_boolean, input_number, input_text, input_select, input_datetime, input_button, counter, timer, schedule) |
 | `manage_scripts` | CRUD operations on scripts |
+| `manage_scenes` | CRUD plus `activate` for scenes |
+| `get_home_registry` | Topology data (areas, devices, entities, labels, floors); `kind=all` returns the full registry in one call |
+| `list_home_services` | Discover available services with their fields and target selectors before calling them |
+| `get_state_history` | Time-series state history for entities (numeric trends, on/off timelines) |
+| `render_template` | Evaluate a Jinja2 template against current state for compound queries |
+| `get_long_term_statistics` | Long-term statistics (energy/gas/water/measurement sensors) aggregated by 5minute/hour/day/week/month |
+| `get_calendar_events` | Upcoming events from HA calendar entities (lists calendars when entity_id is omitted) |
 
 **Lists** (requires HA):
 
