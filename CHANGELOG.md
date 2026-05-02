@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/nabkey/mcp-home/compare/v1.2.0...v1.3.0) (2026-05-02)
+
+
+### Features
+
+* **hass:** add registry, history, template, scenes, stats, calendar tools ([bd2acfc](https://github.com/nabkey/mcp-home/commit/bd2acfca8fad0f55bb95dd0be86facbece7a89f2))
+
 ## [1.2.0](https://github.com/nabkey/mcp-home/compare/v1.1.0...v1.2.0) (2026-05-02)
 
 
