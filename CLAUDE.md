@@ -126,6 +126,7 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `manage_automations` | CRUD operations on automations |
 | `get_automation_traces` | Debug automation execution history via WebSocket |
 | `manage_helpers` | CRUD operations on helpers (input_boolean, input_number, input_text, input_select, input_datetime, input_button, counter, timer, schedule) |
+| `manage_scripts` | CRUD operations on scripts |
 
 **Lists** (requires HA):
 

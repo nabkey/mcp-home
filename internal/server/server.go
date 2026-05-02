@@ -18,7 +18,7 @@ func New(cfg config.CLI, logger *slog.Logger) *mcp.Server {
 		Name:    "homeassistant",
 		Version: "0.1.0",
 	}, &mcp.ServerOptions{
-		Instructions: "Home Assistant MCP server. Provides tools to query and control smart home devices, manage automations, view event history, manage to-do lists, search/add media via Sonarr/Radarr, and view Frigate NVR cameras and detection events.",
+		Instructions: "Home Assistant MCP server. Provides tools to query and control smart home devices, manage automations and scripts, view event history, manage to-do lists, search/add media via Sonarr/Radarr, and view Frigate NVR cameras and detection events.",
 		Logger:       logger,
 	})
 
