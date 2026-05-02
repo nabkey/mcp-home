@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/nabkey/mcp-home/compare/v1.1.0...v1.2.0) (2026-05-02)
+
+
+### Features
+
+* **hass:** add manage_scripts tool for HA script CRUD ([1102562](https://github.com/nabkey/mcp-home/commit/1102562202e67b9062951cbe92e41dfd581dd291))
+
 ## [1.1.0](https://github.com/nabkey/mcp-home/compare/v1.0.0...v1.1.0) (2026-04-27)
 
 
