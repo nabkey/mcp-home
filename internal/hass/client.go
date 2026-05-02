@@ -303,6 +303,63 @@ func (c *Client) DeleteAutomation(ctx context.Context, id string) error {
 	return err
 }
 
+// CreateScript creates a new script with the given object_id.
+func (c *Client) CreateScript(ctx context.Context, objectID string, config map[string]any) (map[string]any, error) {
+	if err := validate.Identifier("script id", objectID); err != nil {
+		return nil, err
+	}
+
+	path := fmt.Sprintf("/api/config/script/config/%s", objectID)
+	body, err := c.doRequest(ctx, "POST", path, nil, config)
+	if err != nil {
+		return nil, err
+	}
+
+	var response map[string]any
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &response); err != nil {
+			return map[string]any{"status": "ok", "id": objectID}, nil
+		}
+	} else {
+		return map[string]any{"status": "ok", "id": objectID}, nil
+	}
+
+	return response, nil
+}
+
+// UpdateScript updates an existing script identified by its object_id.
+func (c *Client) UpdateScript(ctx context.Context, objectID string, config map[string]any) (map[string]any, error) {
+	if err := validate.Identifier("script id", objectID); err != nil {
+		return nil, err
+	}
+
+	path := fmt.Sprintf("/api/config/script/config/%s", objectID)
+	body, err := c.doRequest(ctx, "POST", path, nil, config)
+	if err != nil {
+		return nil, err
+	}
+
+	var response map[string]any
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &response); err != nil {
+			return map[string]any{"status": "ok", "id": objectID}, nil
+		}
+	} else {
+		return map[string]any{"status": "ok", "id": objectID}, nil
+	}
+
+	return response, nil
+}
+
+// DeleteScript deletes a script identified by its object_id.
+func (c *Client) DeleteScript(ctx context.Context, objectID string) error {
+	if err := validate.Identifier("script id", objectID); err != nil {
+		return err
+	}
+	_, err := c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/config/script/config/%s", objectID), nil, nil)
+	return err
+}
+
 // BaseURL returns the client's base URL.
 func (c *Client) BaseURL() string { return c.baseURL }
 
@@ -426,6 +483,31 @@ func (c *WebsocketClient) GetAutomationConfig(entityID string) (map[string]any, 
 	result, ok := resp["result"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("unexpected automation/config result format")
+	}
+	return result, nil
+}
+
+// GetScriptConfig retrieves the raw configuration for a specific script via WebSocket.
+func (c *WebsocketClient) GetScriptConfig(entityID string) (map[string]any, error) {
+	id := c.nextID()
+	req := map[string]any{
+		"id":        id,
+		"type":      "script/config",
+		"entity_id": entityID,
+	}
+
+	if err := c.conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("failed to send script/config request: %w", err)
+	}
+
+	resp, err := c.readResponse(id)
+	if err != nil {
+		return nil, fmt.Errorf("script/config: %w", err)
+	}
+
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected script/config result format")
 	}
 	return result, nil
 }

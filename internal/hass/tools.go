@@ -36,6 +36,7 @@ func (t *Tools) Register(server *mcp.Server) {
 	t.registerManageAutomations(server)
 	t.registerGetAutomationTraces(server)
 	t.registerManageHelpers(server)
+	t.registerManageScripts(server)
 }
 
 // --- get_home_states ---
@@ -366,6 +367,95 @@ func (t *Tools) registerManageHelpers(server *mcp.Server) {
 
 		default:
 			return mcputil.TextResult(fmt.Sprintf("Unknown action: %s (use list, create, update, delete)", args.Action)), nil, nil
+		}
+	})
+}
+
+// --- manage_scripts ---
+
+type manageScriptsArgs struct {
+	Action string         `json:"action" jsonschema:"Action: list (all scripts) get_config (get config) create update delete"`
+	ID     string         `json:"id,omitempty" jsonschema:"Script entity_id (for get_config, e.g. script.alert) or object_id without script. prefix (for create/update/delete, e.g. alert)"`
+	Config map[string]any `json:"config,omitempty" jsonschema:"Script configuration (for create/update). Top-level keys: alias, sequence, mode, max, fields, icon, description."`
+}
+
+func (t *Tools) registerManageScripts(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "manage_scripts",
+		Description: "Manage Home Assistant scripts. List all, get config, create, update, or delete scripts.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageScriptsArgs) (*mcp.CallToolResult, any, error) {
+		switch args.Action {
+		case "list":
+			states, err := t.client.GetStates(ctx)
+			if err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			var scripts []map[string]any
+			for _, s := range states {
+				if strings.HasPrefix(s.EntityID, "script.") {
+					scripts = append(scripts, map[string]any{
+						"entity_id":      s.EntityID,
+						"state":          s.State,
+						"friendly_name":  s.Attributes["friendly_name"],
+						"last_triggered": s.Attributes["last_triggered"],
+					})
+				}
+			}
+			return mcputil.JSONResult(map[string]any{"scripts": scripts})
+
+		case "get_config":
+			if args.ID == "" {
+				return mcputil.TextResult("Error: id (entity_id) is required for get_config"), nil, nil
+			}
+			wsClient := t.client.NewWebsocketClient()
+			if err := wsClient.Dial(); err != nil {
+				return mcputil.Errorf("connecting: %v", err), nil, nil
+			}
+			defer func() { _ = wsClient.Close() }()
+
+			config, err := wsClient.GetScriptConfig(args.ID)
+			if err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			return mcputil.JSONResult(map[string]any{"config": config})
+
+		case "create":
+			if args.ID == "" {
+				return mcputil.TextResult("Error: id (object_id without script. prefix) is required for create"), nil, nil
+			}
+			if args.Config == nil {
+				return mcputil.TextResult("Error: config is required for create"), nil, nil
+			}
+			resp, err := t.client.CreateScript(ctx, args.ID, args.Config)
+			if err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			return mcputil.JSONResult(map[string]any{"config": resp, "status": "created"})
+
+		case "update":
+			if args.ID == "" {
+				return mcputil.TextResult("Error: id is required for update"), nil, nil
+			}
+			if args.Config == nil {
+				return mcputil.TextResult("Error: config is required for update"), nil, nil
+			}
+			resp, err := t.client.UpdateScript(ctx, args.ID, args.Config)
+			if err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			return mcputil.JSONResult(map[string]any{"config": resp, "status": "updated"})
+
+		case "delete":
+			if args.ID == "" {
+				return mcputil.TextResult("Error: id is required for delete"), nil, nil
+			}
+			if err := t.client.DeleteScript(ctx, args.ID); err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			return mcputil.JSONResult(map[string]any{"status": "deleted"})
+
+		default:
+			return mcputil.TextResult(fmt.Sprintf("Unknown action: %s (use list, get_config, create, update, delete)", args.Action)), nil, nil
 		}
 	})
 }
