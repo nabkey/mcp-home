@@ -24,6 +24,7 @@ jobs:
         if: ${{ steps.release.outputs.pr }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_PAT }}
+          GH_REPO: ${{ github.repository }}
           PR_JSON: ${{ steps.release.outputs.pr }}
         run: |
           pr_number=$(printf '%s' "$PR_JSON" | jq -r .number)
