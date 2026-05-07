@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/nabkey/mcp-home/compare/v1.3.0...v1.3.1) (2026-05-07)
+
+
+### Dependencies
+
+* bump publish workflow Actions to Node 24 majors ([b8702d5](https://github.com/nabkey/mcp-home/commit/b8702d509337a0fe080aa97e47190665a85c9fbe))
+
 ## [1.3.0](https://github.com/nabkey/mcp-home/compare/v1.2.0...v1.3.0) (2026-05-02)
 
 
