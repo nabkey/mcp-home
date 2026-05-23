@@ -25,7 +25,7 @@ go test ./internal/hass -run TestFunctionName
 go vet ./...
 ```
 
-Go 1.26.2 is managed via mise (see `mise.toml`).
+Go 1.26.3 is managed via mise (see `mise.toml`).
 
 ### Releases & container
 
