@@ -46,6 +46,7 @@ func (t *Tools) Register(server *mcp.Server) {
 	t.registerGetCalendarEvents(server)
 	t.registerManageDashboards(server)
 	t.registerManageDashboardResources(server)
+	t.registerManageRegistry(server)
 }
 
 // --- get_home_states ---

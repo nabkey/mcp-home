@@ -129,6 +129,7 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `manage_scripts` | CRUD operations on scripts |
 | `manage_scenes` | CRUD plus `activate` for scenes |
 | `get_home_registry` | Topology data (areas, devices, entities, labels, floors); `kind=all` returns the full registry in one call |
+| `manage_registry` | Create/update/delete area/entity/device/label/floor registry entries (assign areas, rename, label) |
 | `list_home_services` | Discover available services with their fields and target selectors before calling them |
 | `get_state_history` | Time-series state history for entities (numeric trends, on/off timelines) |
 | `render_template` | Evaluate a Jinja2 template against current state for compound queries |
