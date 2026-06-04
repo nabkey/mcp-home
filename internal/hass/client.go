@@ -900,6 +900,63 @@ func (c *WebsocketClient) listResultMaps(commandType string) ([]map[string]any, 
 	return out, nil
 }
 
+// wsCommand sends a WebSocket command of the given type with the supplied
+// extra fields and returns the full response. The "id" and "type" fields are
+// set automatically and cannot be overridden via fields.
+func (c *WebsocketClient) wsCommand(commandType string, fields map[string]any) (map[string]any, error) {
+	id := c.nextID()
+	req := map[string]any{"id": id, "type": commandType}
+	for k, v := range fields {
+		if k == "id" || k == "type" {
+			continue
+		}
+		req[k] = v
+	}
+	if err := c.conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("failed to send %s request: %w", commandType, err)
+	}
+	resp, err := c.readResponse(id)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", commandType, err)
+	}
+	return resp, nil
+}
+
+// resultMap extracts the "result" object from a WebSocket response, returning
+// an empty map if it is absent or not an object.
+func resultMap(resp map[string]any) map[string]any {
+	if m, ok := resp["result"].(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
+// resultList extracts the "result" array from a WebSocket response as a slice
+// of objects, skipping any non-object elements.
+func resultList(resp map[string]any) []map[string]any {
+	result, ok := resp["result"].([]any)
+	if !ok {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(result))
+	for _, r := range result {
+		if m, ok := r.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// nullable returns nil for an empty string so it marshals to JSON null,
+// otherwise the string itself. Used for optional WebSocket fields like
+// Lovelace url_path where null selects the default dashboard.
+func nullable(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // ListAreas returns all configured areas from the area registry.
 func (c *WebsocketClient) ListAreas() ([]map[string]any, error) {
 	return c.listResultMaps("config/area_registry/list")
