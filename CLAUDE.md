@@ -129,11 +129,16 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `manage_scripts` | CRUD operations on scripts |
 | `manage_scenes` | CRUD plus `activate` for scenes |
 | `get_home_registry` | Topology data (areas, devices, entities, labels, floors); `kind=all` returns the full registry in one call |
+| `manage_registry` | Create/update/delete area/entity/device/label/floor registry entries (assign areas, rename, label) |
+| `execute_script` | Run an ad-hoc action sequence (HA script syntax) without storing a script |
+| `get_diagnostics` | Health/error diagnostics: error log, system health, repair issues, persistent notifications (`kind=all` by default) |
 | `list_home_services` | Discover available services with their fields and target selectors before calling them |
 | `get_state_history` | Time-series state history for entities (numeric trends, on/off timelines) |
 | `render_template` | Evaluate a Jinja2 template against current state for compound queries |
 | `get_long_term_statistics` | Long-term statistics (energy/gas/water/measurement sensors) aggregated by 5minute/hour/day/week/month |
 | `get_calendar_events` | Upcoming events from HA calendar entities (lists calendars when entity_id is omitted) |
+| `manage_dashboards` | List/read/save/delete Lovelace dashboard configs and create/update/delete storage dashboards (save_config overwrites the whole config) |
+| `manage_dashboard_resources` | CRUD for Lovelace dashboard resources (custom JS/CSS modules) |
 
 **Lists** (requires HA):
 
