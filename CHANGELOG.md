@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.4.0](https://github.com/nabkey/mcp-home/compare/v1.3.1...v1.4.0) (2026-06-04)
+
+
+### Features
+
+* **hass:** add execute_script tool for ad-hoc action sequences ([1d5875f](https://github.com/nabkey/mcp-home/commit/1d5875fe842d720697fae48a56e6e136c1c14ed2))
+* **hass:** add get_diagnostics tool ([1fa2288](https://github.com/nabkey/mcp-home/commit/1fa22885e4257f187c8791544e8d63bfe8fa7ad7))
+* **hass:** add Lovelace dashboard management tools ([313bd5c](https://github.com/nabkey/mcp-home/commit/313bd5c43520b3ee6a0231a9beff06a61798b18a))
+* **hass:** add registry write tool (manage_registry) ([2a1554c](https://github.com/nabkey/mcp-home/commit/2a1554c87e4f1f16a1706508324dae556c6e869a))
+
 ## [1.3.1](https://github.com/nabkey/mcp-home/compare/v1.3.0...v1.3.1) (2026-05-07)
 
 
