@@ -131,6 +131,7 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `get_home_registry` | Topology data (areas, devices, entities, labels, floors); `kind=all` returns the full registry in one call |
 | `manage_registry` | Create/update/delete area/entity/device/label/floor registry entries (assign areas, rename, label) |
 | `execute_script` | Run an ad-hoc action sequence (HA script syntax) without storing a script |
+| `get_diagnostics` | Health/error diagnostics: error log, system health, repair issues, persistent notifications (`kind=all` by default) |
 | `list_home_services` | Discover available services with their fields and target selectors before calling them |
 | `get_state_history` | Time-series state history for entities (numeric trends, on/off timelines) |
 | `render_template` | Evaluate a Jinja2 template against current state for compound queries |

@@ -48,6 +48,7 @@ func (t *Tools) Register(server *mcp.Server) {
 	t.registerManageDashboardResources(server)
 	t.registerManageRegistry(server)
 	t.registerExecuteScript(server)
+	t.registerGetDiagnostics(server)
 }
 
 // --- get_home_states ---
