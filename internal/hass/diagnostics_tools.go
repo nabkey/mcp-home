@@ -38,6 +38,7 @@ func (t *Tools) registerGetDiagnostics(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_diagnostics",
 		Description: "Get Home Assistant health and error diagnostics: the recent error log, system health info, open repair issues, and active persistent notifications. Use kind=all (default) for a full picture when troubleshooting a misbehaving Home Assistant.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getDiagnosticsArgs) (*mcp.CallToolResult, any, error) {
 		kind := strings.ToLower(strings.TrimSpace(args.Kind))
 		if kind == "" {

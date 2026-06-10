@@ -59,6 +59,7 @@ func (t *Tools) registerSearchMovies(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_movies",
 		Description: "Search for movies by name using Radarr. Returns matching movies with TMDB IDs that can be used to add them.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchMoviesArgs) (*mcp.CallToolResult, any, error) {
 		if args.Term == "" {
 			return mcputil.TextResult("Error: search term is required"), nil, nil
@@ -91,6 +92,7 @@ func (t *Tools) registerAddMovie(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "add_movie",
 		Description: "Add a movie to Radarr for downloading. Use search_movies first to get the TMDB ID.",
+		Annotations: mcputil.Additive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args addMovieArgs) (*mcp.CallToolResult, any, error) {
 		if args.TmdbID == 0 {
 			return mcputil.TextResult("Error: tmdb_id is required"), nil, nil
@@ -141,6 +143,7 @@ func (t *Tools) registerSearchSeries(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search_series",
 		Description: "Search for TV series by name using Sonarr. Returns matching series with TVDB IDs that can be used to add them.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args searchSeriesArgs) (*mcp.CallToolResult, any, error) {
 		if args.Term == "" {
 			return mcputil.TextResult("Error: search term is required"), nil, nil
@@ -178,6 +181,7 @@ func (t *Tools) registerAddSeries(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "add_series",
 		Description: "Add a TV series to Sonarr for downloading. Use search_series first to get the TVDB ID.",
+		Annotations: mcputil.Additive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args addSeriesArgs) (*mcp.CallToolResult, any, error) {
 		if args.TvdbID == 0 {
 			return mcputil.TextResult("Error: tvdb_id is required"), nil, nil
@@ -242,6 +246,7 @@ func (t *Tools) registerGetDownloadQueue(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_download_queue",
 		Description: "Check the download queue status for Sonarr (TV) and/or Radarr (movies). Shows progress, status, and any errors.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getDownloadQueueArgs) (*mcp.CallToolResult, any, error) {
 		limit := args.Limit
 		if limit <= 0 {

@@ -15,12 +15,18 @@ type Tools struct {
 	client *Client
 }
 
-// NewTools creates a new Tools instance.
-func NewTools(baseURL, token string) (*Tools, error) {
+// NewTools creates a new Tools instance. denyServices is an optional list of
+// domain.service patterns to refuse (see ServicePolicy).
+func NewTools(baseURL, token string, denyServices []string) (*Tools, error) {
 	client, err := NewClient(baseURL, token)
 	if err != nil {
 		return nil, err
 	}
+	policy, err := NewServicePolicy(denyServices)
+	if err != nil {
+		return nil, err
+	}
+	client.SetServicePolicy(policy)
 	return &Tools{client: client}, nil
 }
 
@@ -61,6 +67,7 @@ func (t *Tools) registerGetStates(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_home_states",
 		Description: "Get current states of Home Assistant entities. Use domain filter to get specific types: light, switch, sensor, climate, cover, lock, media_player, todo.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getStatesArgs) (*mcp.CallToolResult, any, error) {
 		states, err := t.client.GetStates(ctx)
 		if err != nil {
@@ -96,6 +103,7 @@ func (t *Tools) registerGetEvents(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_home_events",
 		Description: "Get recent events from Home Assistant logbook. Shows state changes for smart home devices.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getEventsArgs) (*mcp.CallToolResult, any, error) {
 		hours := args.Hours
 		if hours <= 0 {
@@ -131,6 +139,7 @@ func (t *Tools) registerCallService(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "call_home_service",
 		Description: "Control Home Assistant devices by calling services. Turn on/off lights, set thermostat temperature, open/close covers, lock/unlock doors, play/pause media.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args callServiceArgs) (*mcp.CallToolResult, any, error) {
 		if args.Domain == "" {
 			return mcputil.TextResult("Error: domain is required"), nil, nil
@@ -169,6 +178,7 @@ func (t *Tools) registerGetTodoItems(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_todo_items",
 		Description: "Get items from a Home Assistant todo list. Use get_home_states with domain=todo to discover available lists first.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getTodoItemsArgs) (*mcp.CallToolResult, any, error) {
 		if args.EntityID == "" {
 			return mcputil.TextResult("Error: entity_id is required"), nil, nil
@@ -198,6 +208,7 @@ func (t *Tools) registerManageAutomations(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "manage_automations",
 		Description: "Manage Home Assistant automations. List all, get config, create, update, or delete automations.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageAutomationsArgs) (*mcp.CallToolResult, any, error) {
 		switch args.Action {
 		case "list":
@@ -283,6 +294,7 @@ func (t *Tools) registerGetAutomationTraces(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_automation_traces",
 		Description: "Get execution traces for a Home Assistant automation. Shows trigger info, conditions evaluated, and actions executed. Useful for debugging.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getAutomationTracesArgs) (*mcp.CallToolResult, any, error) {
 		if args.AutomationID == "" {
 			return mcputil.TextResult("Error: automation_id is required"), nil, nil
@@ -323,6 +335,7 @@ func (t *Tools) registerManageHelpers(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "manage_helpers",
 		Description: "Manage Home Assistant helpers (input_boolean, input_button, input_datetime, input_number, input_select, input_text, counter, timer, schedule). List, create, update, or delete helpers.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageHelpersArgs) (*mcp.CallToolResult, any, error) {
 		if args.HelperType == "" {
 			return mcputil.TextResult("Error: helper_type is required"), nil, nil
@@ -395,6 +408,7 @@ func (t *Tools) registerManageScripts(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "manage_scripts",
 		Description: "Manage Home Assistant scripts. List all, get config, create, update, or delete scripts.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageScriptsArgs) (*mcp.CallToolResult, any, error) {
 		switch args.Action {
 		case "list":
@@ -484,6 +498,7 @@ func (t *Tools) registerManageScenes(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "manage_scenes",
 		Description: "Manage Home Assistant scenes. List all, get config, create, update, delete, or activate a scene. Activating turns on the scene's entity_id.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageScenesArgs) (*mcp.CallToolResult, any, error) {
 		switch args.Action {
 		case "list":
@@ -580,6 +595,7 @@ func (t *Tools) registerGetHomeRegistry(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_home_registry",
 		Description: "Get Home Assistant topology data (areas, devices, entities, labels, floors). Use kind=all to fetch the full home topology in one call so the agent can map entities to rooms, devices, and floors.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getHomeRegistryArgs) (*mcp.CallToolResult, any, error) {
 		kind := strings.ToLower(strings.TrimSpace(args.Kind))
 		if kind == "" {
@@ -667,6 +683,7 @@ func (t *Tools) registerListHomeServices(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_home_services",
 		Description: "List available Home Assistant services with their fields and target selectors. Use this before call_home_service to discover valid (domain, service) pairs and required parameters.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args listHomeServicesArgs) (*mcp.CallToolResult, any, error) {
 		services, err := t.client.GetServices(ctx)
 		if err != nil {
@@ -703,6 +720,7 @@ func (t *Tools) registerGetStateHistory(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_state_history",
 		Description: "Get the time-series state history for one or more entities. Use this for numeric trends (e.g. temperature over the night, door open/closed timeline). For human-readable event descriptions use get_home_events instead.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getStateHistoryArgs) (*mcp.CallToolResult, any, error) {
 		if args.EntityID == "" {
 			return mcputil.TextResult("Error: entity_id is required"), nil, nil
@@ -760,6 +778,7 @@ func (t *Tools) registerRenderTemplate(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "render_template",
 		Description: "Render a Home Assistant Jinja2 template against current state. Use this for compound questions (is anyone home? average of all temperature sensors? any door open?) that would otherwise require fetching and post-processing many states.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args renderTemplateArgs) (*mcp.CallToolResult, any, error) {
 		if args.Template == "" {
 			return mcputil.TextResult("Error: template is required"), nil, nil
@@ -784,6 +803,7 @@ func (t *Tools) registerGetLongTermStatistics(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_long_term_statistics",
 		Description: "Query Home Assistant's long-term statistics (energy, gas, water, measurement-class sensors) aggregated by 5minute/hour/day/week/month. Required for energy-usage and trend questions beyond the 10-day short-term history window.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getLongTermStatisticsArgs) (*mcp.CallToolResult, any, error) {
 		if args.StatisticIDs == "" {
 			return mcputil.TextResult("Error: statistic_ids is required"), nil, nil
@@ -844,6 +864,7 @@ func (t *Tools) registerGetCalendarEvents(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_calendar_events",
 		Description: "Get upcoming events from a Home Assistant calendar entity. Omit entity_id to list available calendars first; supply it to fetch events in a forward-looking window.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getCalendarEventsArgs) (*mcp.CallToolResult, any, error) {
 		if args.EntityID == "" {
 			calendars, err := t.client.GetCalendars(ctx)

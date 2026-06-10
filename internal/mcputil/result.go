@@ -21,7 +21,7 @@ func TextResult(text string) *mcp.CallToolResult {
 func JSONResult(v any) (*mcp.CallToolResult, any, error) {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return TextResult(fmt.Sprintf("Error marshaling result: %v", err)), nil, nil
+		return Errorf("marshaling result: %v", err), nil, nil
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
@@ -30,7 +30,9 @@ func JSONResult(v any) (*mcp.CallToolResult, any, error) {
 	}, nil, nil
 }
 
-// Errorf returns an MCP text result with a formatted error message.
+// Errorf returns an MCP error result (IsError set) with a formatted message.
 func Errorf(format string, args ...any) *mcp.CallToolResult {
-	return TextResult(fmt.Sprintf("Error: "+format, args...))
+	result := TextResult(fmt.Sprintf("Error: "+format, args...))
+	result.IsError = true
+	return result
 }

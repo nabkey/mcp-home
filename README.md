@@ -60,7 +60,17 @@ All configuration is via environment variables (see `.env.example`) or CLI flags
 | Radarr | `RADARR_URL`, `RADARR_API_KEY` | No |
 | Frigate | `FRIGATE_URL` | No |
 
-Pass `--insecure` to disable authentication for local development.
+Pass `--insecure` to disable authentication for local development. `LOG_LEVEL` (`debug`, `info`, `warn`, `error`) controls log verbosity.
+
+### Guardrails & audit
+
+`HASS_DENY_SERVICES` refuses calls to specific Home Assistant services no matter what the assistant is asked, e.g.:
+
+```bash
+HASS_DENY_SERVICES=lock.unlock,alarm_control_panel.*
+```
+
+Patterns are `domain.service` pairs; either part may be `*`. The deny list covers direct service calls and ad-hoc `execute_script` sequences (see [SECURITY.md](SECURITY.md) for limitations). Every tool call is also audit-logged with the authenticated user's email, tool name, arguments, and outcome.
 
 ### Docker
 

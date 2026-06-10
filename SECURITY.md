@@ -78,6 +78,16 @@ All user-supplied values in URL paths (HA service domain/name, automation IDs, F
 
 The cloudflared tunnel token is passed via `TUNNEL_TOKEN` environment variable, not CLI arguments, preventing exposure via `ps aux`.
 
+### 7. Service Deny List
+
+`HASS_DENY_SERVICES` refuses calls to listed Home Assistant services (e.g. `lock.unlock,alarm_control_panel.*`). It is enforced for direct service calls (`call_home_service`, scene activation, to-do changes) and ad-hoc `execute_script` sequences (including nested choose/repeat blocks, both `action:` and legacy `service:` keys).
+
+**Limitation:** this is a guardrail against unwanted assistant actions (including prompt injection driving the model), not a security boundary. Stored automations and scripts created via `manage_automations`/`manage_scripts` execute inside Home Assistant and are not inspected, and templated action names cannot be statically checked. An attacker with a valid CF Access session has the full tool surface minus the denied services.
+
+### 8. Audit Logging
+
+Every tool call is logged with the authenticated user (CF Access email from the JWT), tool name, truncated arguments, outcome, and duration — a per-user audit trail of everything the assistant did in the home.
+
 ## Open Questions
 
 ### Rate limiting

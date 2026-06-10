@@ -13,6 +13,7 @@ import (
 type CLI struct {
 	Cloudflare CloudflareConfig `embed:"" prefix:"cf-"      envprefix:"CF_"`
 	Insecure   bool             `env:"INSECURE" default:"false" help:"Skip Cloudflare Access JWT validation (DANGEROUS: exposes server without auth)"`
+	LogLevel   string           `env:"LOG_LEVEL" default:"info" enum:"debug,info,warn,error" help:"Log level (debug, info, warn, error)"`
 	Hass       HassConfig       `embed:"" prefix:"hass-"    envprefix:"HASS_"`
 	Sonarr     SonarrConfig     `embed:"" prefix:"sonarr-"  envprefix:"SONARR_"`
 	Radarr     RadarrConfig     `embed:"" prefix:"radarr-"  envprefix:"RADARR_"`
@@ -46,6 +47,10 @@ type CloudflareConfig struct {
 type HassConfig struct {
 	URL   string `env:"URL"   help:"Home Assistant URL"`
 	Token string `env:"TOKEN" help:"Home Assistant long-lived access token"`
+	// DenyServices guards against unwanted assistant actions. It applies to
+	// direct service calls and ad-hoc execute_script sequences, not to stored
+	// automations/scripts.
+	DenyServices []string `env:"DENY_SERVICES" help:"Comma-separated domain.service patterns to refuse (e.g. lock.unlock,alarm_control_panel.*). '*' matches a whole domain or service."`
 }
 
 // Enabled returns true if Home Assistant is fully configured.

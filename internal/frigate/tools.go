@@ -40,6 +40,7 @@ func (t *Tools) registerListCameras(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_frigate_cameras",
 		Description: "List all available cameras in Frigate NVR.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args listCamerasArgs) (*mcp.CallToolResult, any, error) {
 		config, err := t.client.GetConfig(ctx)
 		if err != nil {
@@ -70,6 +71,7 @@ func (t *Tools) registerGetCameraSnapshot(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_camera_snapshot",
 		Description: "Get a current snapshot image from a Frigate camera as base64-encoded JPEG.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getCameraSnapshotArgs) (*mcp.CallToolResult, any, error) {
 		if args.Camera == "" {
 			return mcputil.TextResult("Error: camera name is required"), nil, nil
@@ -115,6 +117,7 @@ func (t *Tools) registerGetEvents(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_frigate_events",
 		Description: "Get recent detection events from Frigate NVR. Shows when people, cars, animals, etc. were detected by cameras.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getEventsArgs) (*mcp.CallToolResult, any, error) {
 		hours := args.Hours
 		if hours <= 0 {
@@ -181,6 +184,7 @@ func (t *Tools) registerGetEventSnapshot(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_event_snapshot",
 		Description: "Get the snapshot image for a specific Frigate detection event as base64-encoded JPEG.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getEventSnapshotArgs) (*mcp.CallToolResult, any, error) {
 		if args.EventID == "" {
 			return mcputil.TextResult("Error: event_id is required"), nil, nil

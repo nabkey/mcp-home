@@ -23,8 +23,11 @@ func New(cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
 		Logger:       logger,
 	})
 
+	// Audit every tool call with the authenticated user.
+	server.AddReceivingMiddleware(auditMiddleware(logger))
+
 	if cfg.Hass.Enabled() {
-		hassTools, err := hass.NewTools(cfg.Hass.URL, cfg.Hass.Token)
+		hassTools, err := hass.NewTools(cfg.Hass.URL, cfg.Hass.Token, cfg.Hass.DenyServices)
 		if err != nil {
 			logger.Warn("Home Assistant tools failed", "error", err)
 		} else {

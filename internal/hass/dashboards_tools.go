@@ -23,6 +23,7 @@ func (t *Tools) registerManageDashboards(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "manage_dashboards",
 		Description: "Manage Home Assistant Lovelace dashboards. List dashboards, read a dashboard's full config (views/cards), overwrite it, revert it to auto-generated, or create/update/delete storage dashboards. save_config replaces the whole config: always get_config first, then modify and save the entire object.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageDashboardsArgs) (*mcp.CallToolResult, any, error) {
 		wsClient := t.client.NewWebsocketClient()
 		if err := wsClient.Dial(ctx); err != nil {
@@ -111,6 +112,7 @@ func (t *Tools) registerManageDashboardResources(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "manage_dashboard_resources",
 		Description: "Manage Home Assistant Lovelace dashboard resources (custom JS/CSS modules loaded by the frontend). List, create, update, or delete resources.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageDashboardResourcesArgs) (*mcp.CallToolResult, any, error) {
 		wsClient := t.client.NewWebsocketClient()
 		if err := wsClient.Dial(ctx); err != nil {
