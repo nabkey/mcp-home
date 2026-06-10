@@ -92,7 +92,7 @@ func latestVersion(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
@@ -137,7 +137,7 @@ func downloadCloudflared(ctx context.Context, downloadURL, destPath string) erro
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download returned status %d", resp.StatusCode)
@@ -157,7 +157,7 @@ func extractFromTgz(r io.Reader, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("gzip open: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	for {
@@ -183,8 +183,8 @@ func writeBinary(r io.Reader, destPath string) error {
 	}
 	tmpPath := tmp.Name()
 	defer func() {
-		tmp.Close()
-		os.Remove(tmpPath) // no-op if rename succeeded
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath) // no-op if rename succeeded
 	}()
 
 	if _, err := io.Copy(tmp, r); err != nil {

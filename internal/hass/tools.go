@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nabkey/mcp-home/internal/mcputil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/mcputil"
 )
 
 // Tools holds a set of Home Assistant MCP tools configured with a client.
@@ -223,7 +223,7 @@ func (t *Tools) registerManageAutomations(server *mcp.Server) {
 				return mcputil.TextResult("Error: id (entity_id) is required for get_config"), nil, nil
 			}
 			wsClient := t.client.NewWebsocketClient()
-			if err := wsClient.Dial(); err != nil {
+			if err := wsClient.Dial(ctx); err != nil {
 				return mcputil.Errorf("connecting: %v", err), nil, nil
 			}
 			defer func() { _ = wsClient.Close() }()
@@ -289,7 +289,7 @@ func (t *Tools) registerGetAutomationTraces(server *mcp.Server) {
 		}
 
 		wsClient := t.client.NewWebsocketClient()
-		if err := wsClient.Dial(); err != nil {
+		if err := wsClient.Dial(ctx); err != nil {
 			return mcputil.Errorf("connecting: %v", err), nil, nil
 		}
 		defer func() { _ = wsClient.Close() }()
@@ -332,7 +332,7 @@ func (t *Tools) registerManageHelpers(server *mcp.Server) {
 		}
 
 		wsClient := t.client.NewWebsocketClient()
-		if err := wsClient.Dial(); err != nil {
+		if err := wsClient.Dial(ctx); err != nil {
 			return mcputil.Errorf("connecting: %v", err), nil, nil
 		}
 		defer func() { _ = wsClient.Close() }()
@@ -420,7 +420,7 @@ func (t *Tools) registerManageScripts(server *mcp.Server) {
 				return mcputil.TextResult("Error: id (entity_id) is required for get_config"), nil, nil
 			}
 			wsClient := t.client.NewWebsocketClient()
-			if err := wsClient.Dial(); err != nil {
+			if err := wsClient.Dial(ctx); err != nil {
 				return mcputil.Errorf("connecting: %v", err), nil, nil
 			}
 			defer func() { _ = wsClient.Close() }()
@@ -508,7 +508,7 @@ func (t *Tools) registerManageScenes(server *mcp.Server) {
 				return mcputil.TextResult("Error: id (entity_id) is required for get_config"), nil, nil
 			}
 			wsClient := t.client.NewWebsocketClient()
-			if err := wsClient.Dial(); err != nil {
+			if err := wsClient.Dial(ctx); err != nil {
 				return mcputil.Errorf("connecting: %v", err), nil, nil
 			}
 			defer func() { _ = wsClient.Close() }()
@@ -587,7 +587,7 @@ func (t *Tools) registerGetHomeRegistry(server *mcp.Server) {
 		}
 
 		wsClient := t.client.NewWebsocketClient()
-		if err := wsClient.Dial(); err != nil {
+		if err := wsClient.Dial(ctx); err != nil {
 			return mcputil.Errorf("connecting: %v", err), nil, nil
 		}
 		defer func() { _ = wsClient.Close() }()
@@ -815,7 +815,7 @@ func (t *Tools) registerGetLongTermStatistics(server *mcp.Server) {
 		start := end.Add(-time.Duration(hours) * time.Hour)
 
 		wsClient := t.client.NewWebsocketClient()
-		if err := wsClient.Dial(); err != nil {
+		if err := wsClient.Dial(ctx); err != nil {
 			return mcputil.Errorf("connecting: %v", err), nil, nil
 		}
 		defer func() { _ = wsClient.Close() }()

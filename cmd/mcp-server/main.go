@@ -14,14 +14,14 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"github.com/nabkey/mcp-home/internal/cfaccess"
 	"github.com/nabkey/mcp-home/internal/config"
 	"github.com/nabkey/mcp-home/internal/middleware"
 	"github.com/nabkey/mcp-home/internal/server"
 	"github.com/nabkey/mcp-home/internal/tunnel"
-	"github.com/modelcontextprotocol/go-sdk/auth"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -56,7 +56,7 @@ func run(cli config.CLI, logger *slog.Logger) error {
 
 	logger.Info("starting MCP HTTP server", "addr", addr)
 
-	srv := server.New(cli, logger)
+	srv := server.New(cli, version, logger)
 	handler := mcp.NewStreamableHTTPHandler(
 		func(req *http.Request) *mcp.Server { return srv },
 		&mcp.StreamableHTTPOptions{
@@ -71,7 +71,7 @@ func run(cli config.CLI, logger *slog.Logger) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	if cli.Insecure {
@@ -163,13 +163,15 @@ func run(cli config.CLI, logger *slog.Logger) error {
 
 	logger.Info("MCP server available", "url", "https://"+cli.Cloudflare.Hostname+"/mcp")
 
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = httpServer.Shutdown(shutdownCtx)
+	}()
+
 	// Run cloudflared — blocks until context is cancelled.
 	if err := tun.Run(ctx); err != nil {
 		return fmt.Errorf("tunnel run: %w", err)
 	}
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	_ = httpServer.Shutdown(shutdownCtx)
 	return nil
 }

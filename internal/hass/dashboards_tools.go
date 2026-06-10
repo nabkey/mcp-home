@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nabkey/mcp-home/internal/mcputil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/mcputil"
 )
 
 // --- manage_dashboards ---
@@ -25,7 +25,7 @@ func (t *Tools) registerManageDashboards(server *mcp.Server) {
 		Description: "Manage Home Assistant Lovelace dashboards. List dashboards, read a dashboard's full config (views/cards), overwrite it, revert it to auto-generated, or create/update/delete storage dashboards. save_config replaces the whole config: always get_config first, then modify and save the entire object.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageDashboardsArgs) (*mcp.CallToolResult, any, error) {
 		wsClient := t.client.NewWebsocketClient()
-		if err := wsClient.Dial(); err != nil {
+		if err := wsClient.Dial(ctx); err != nil {
 			return mcputil.Errorf("connecting: %v", err), nil, nil
 		}
 		defer func() { _ = wsClient.Close() }()
@@ -113,7 +113,7 @@ func (t *Tools) registerManageDashboardResources(server *mcp.Server) {
 		Description: "Manage Home Assistant Lovelace dashboard resources (custom JS/CSS modules loaded by the frontend). List, create, update, or delete resources.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageDashboardResourcesArgs) (*mcp.CallToolResult, any, error) {
 		wsClient := t.client.NewWebsocketClient()
-		if err := wsClient.Dial(); err != nil {
+		if err := wsClient.Dial(ctx); err != nil {
 			return mcputil.Errorf("connecting: %v", err), nil, nil
 		}
 		defer func() { _ = wsClient.Close() }()

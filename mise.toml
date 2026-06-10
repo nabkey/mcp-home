@@ -1,2 +1,28 @@
 [tools]
 go = "1.26.3"
+golangci-lint = "2.12.2"
+
+[tasks.build]
+description = "Build all packages"
+run = "go build ./..."
+
+[tasks.test]
+description = "Run all tests with the race detector"
+run = "go test -race ./..."
+
+[tasks.vet]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run ./..."
+
+[tasks.fmt]
+description = "Format all Go files"
+run = "gofmt -w ."
+
+[tasks.check]
+description = "Everything CI runs: format check, build, vet, test, lint"
+depends = ["build", "vet", "test", "lint"]
+run = 'test -z "$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }'

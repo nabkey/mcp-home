@@ -18,6 +18,19 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Flush forwards to the underlying ResponseWriter so SSE responses are
+// streamed rather than buffered.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the underlying ResponseWriter for http.ResponseController.
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 // Logging returns middleware that logs each HTTP request with method, path,
 // status code, and duration.
 func Logging(logger *slog.Logger) func(http.Handler) http.Handler {

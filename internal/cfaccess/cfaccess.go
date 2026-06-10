@@ -32,6 +32,10 @@ const (
 	certsPath = "/cdn-cgi/access/certs"
 	// cacheDuration controls how long we cache the public keys.
 	cacheDuration = 15 * time.Minute
+	// minRefreshInterval bounds how often an unknown kid can trigger a certs
+	// refetch, so a flood of garbage tokens cannot amplify into a flood of
+	// outbound requests.
+	minRefreshInterval = time.Minute
 )
 
 // Validator validates Cloudflare Access JWTs.
@@ -39,6 +43,10 @@ type Validator struct {
 	teamURL  string // e.g., "https://myteam.cloudflareaccess.com"
 	audience string
 	logger   *slog.Logger
+
+	// fetchMu serializes refreshes so a burst of requests with an unknown kid
+	// results in a single certs fetch.
+	fetchMu sync.Mutex
 
 	mu         sync.RWMutex
 	keys       map[string]crypto.PublicKey // kid -> public key
@@ -183,14 +191,30 @@ func (v *Validator) getKey(ctx context.Context, kid string) (crypto.PublicKey, e
 	}
 	v.mu.RUnlock()
 
-	// Refresh keys.
+	// Refresh keys. fetchMu serializes concurrent refreshes; once inside,
+	// re-check the cache in case another goroutine just refreshed, and skip
+	// the fetch entirely if one happened within minRefreshInterval.
+	v.fetchMu.Lock()
+	defer v.fetchMu.Unlock()
+
+	v.mu.RLock()
+	key, ok := v.keys[kid]
+	recentFetch := time.Since(v.lastFetch) < minRefreshInterval
+	v.mu.RUnlock()
+	if ok && recentFetch {
+		return key, nil
+	}
+	if recentFetch {
+		return nil, fmt.Errorf("key %q not found in recently fetched Cloudflare Access certs", kid)
+	}
+
 	if err := v.fetchKeys(ctx); err != nil {
 		return nil, err
 	}
 
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	key, ok := v.keys[kid]
+	key, ok = v.keys[kid]
 	if !ok {
 		return nil, fmt.Errorf("key %q not found in Cloudflare Access certs", kid)
 	}
@@ -216,7 +240,7 @@ func (v *Validator) fetchKeys(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fetch certs: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("certs endpoint returned status %d", resp.StatusCode)

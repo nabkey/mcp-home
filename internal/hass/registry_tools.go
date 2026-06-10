@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nabkey/mcp-home/internal/mcputil"
 	"github.com/nabkey/mcp-home/internal/validate"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // registrySpec describes how a registry kind maps onto WebSocket commands:
@@ -82,7 +82,7 @@ func (t *Tools) registerManageRegistry(server *mcp.Server) {
 		}
 
 		wsClient := t.client.NewWebsocketClient()
-		if err := wsClient.Dial(); err != nil {
+		if err := wsClient.Dial(ctx); err != nil {
 			return mcputil.Errorf("connecting: %v", err), nil, nil
 		}
 		defer func() { _ = wsClient.Close() }()

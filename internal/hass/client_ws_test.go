@@ -1,10 +1,12 @@
 package hass
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -85,9 +87,59 @@ func newTestWSClient(t *testing.T, respond func(cmd map[string]any) map[string]a
 	t.Cleanup(srv.Close)
 
 	c := &WebsocketClient{baseURL: srv.URL, token: "test-token"}
-	if err := c.Dial(); err != nil {
+	if err := c.Dial(context.Background()); err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c, rec
+}
+
+// TestContextCancellationUnblocksRead verifies that cancelling the context
+// passed to Dial aborts a read that would otherwise wait for wsReadTimeout.
+func TestContextCancellationUnblocksRead(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		_ = conn.WriteJSON(map[string]any{"type": "auth_required"})
+		var auth map[string]any
+		if err := conn.ReadJSON(&auth); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"type": "auth_ok"})
+
+		// Swallow the command and never respond; the next read returns
+		// once the client closes the connection.
+		var cmd map[string]any
+		_ = conn.ReadJSON(&cmd)
+		_ = conn.ReadJSON(&cmd)
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &WebsocketClient{baseURL: srv.URL, token: "test-token"}
+	if err := c.Dial(ctx); err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.ListAreas()
+		done <- err
+	}()
+
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("expected error from cancelled read")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("read did not unblock after context cancellation")
+	}
 }

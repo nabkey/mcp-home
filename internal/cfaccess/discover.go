@@ -35,7 +35,7 @@ func Discover(ctx context.Context, apiToken, accountID, hostname string, logger 
 
 	authDomain := org.AuthDomain
 	if authDomain == "" {
-		return nil, fmt.Errorf("Access organization has no auth_domain configured")
+		return nil, fmt.Errorf("access organization has no auth_domain configured")
 	}
 
 	// auth_domain is "myteam.cloudflareaccess.com" — strip suffix for team name.

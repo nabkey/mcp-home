@@ -18,13 +18,15 @@ All tool groups are optional. The server registers only what's configured and st
 
 ## Tools
 
-**Home Assistant** — query entity states, view logbook events, call services (lights, climate, etc.), manage automations, debug automation traces
+**Home Assistant** — query entity states, history, and long-term statistics; view logbook events; discover and call services (lights, climate, etc.); render Jinja2 templates; manage automations, scripts, scenes, and helpers; debug automation traces; read and organize the registry (areas, devices, entities, labels, floors); manage Lovelace dashboards and resources; run ad-hoc action sequences; read calendars; surface diagnostics (error log, system health, repairs, notifications)
 
 **Lists** — manage Home Assistant to-do lists (view, add, complete, remove items)
 
 **Media** — search and add movies (Radarr) and TV series (Sonarr), check download queue status
 
 **Frigate NVR** — list cameras, get live snapshots, query detection events, get event snapshots
+
+The full tool catalog with per-tool descriptions is in [CLAUDE.md](CLAUDE.md#mcp-tools-provided).
 
 ## Quick start
 
@@ -74,6 +76,18 @@ Tags:
 - `main`, `sha-<short>` — branch / commit pins
 
 The image bundles `cloudflared`, so no runtime download is needed. Build locally with `docker build -t mcp-home .`.
+
+## Development
+
+The Go toolchain and golangci-lint are managed via [mise](https://mise.jdx.dev) — run `mise install` once, then:
+
+```bash
+mise run test     # go test -race ./...
+mise run lint     # golangci-lint run ./...
+mise run check    # everything CI runs: format check, build, vet, test, lint
+```
+
+CI runs the same checks on every pull request, and the container publish workflow is gated on them.
 
 ## Releases
 

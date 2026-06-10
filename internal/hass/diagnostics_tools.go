@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/nabkey/mcp-home/internal/mcputil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/mcputil"
 )
 
 // maxErrorLogChars bounds the error log returned to the model: only the most
@@ -71,7 +71,7 @@ func (t *Tools) registerGetDiagnostics(server *mcp.Server) {
 
 		if kind == "system_health" || kind == "repairs" || kind == "notifications" || kind == "all" {
 			wsClient := t.client.NewWebsocketClient()
-			if err := wsClient.Dial(); err != nil {
+			if err := wsClient.Dial(ctx); err != nil {
 				// For a single WS section, surface the failure. For kind=all,
 				// record it and still return whatever (e.g. the error_log) was
 				// already gathered — the WS layer is often the thing failing.
