@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/nabkey/mcp-home/internal/validate"
@@ -32,7 +33,7 @@ func NewClient(baseURL string) (*Client, error) {
 	}
 
 	return &Client{
-		baseURL: baseURL,
+		baseURL: strings.TrimSuffix(baseURL, "/"),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -72,7 +73,8 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 	if err != nil {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
-	u.Path = path
+	// Append to any path prefix in the base URL (e.g. https://host/frigate).
+	u.Path = strings.TrimSuffix(u.Path, "/") + path
 	if query != nil {
 		u.RawQuery = query.Encode()
 	}

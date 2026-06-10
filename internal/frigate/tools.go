@@ -5,8 +5,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/nabkey/mcp-home/internal/mcputil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/mcputil"
 )
 
 // Tools holds the Frigate tools and their configuration.

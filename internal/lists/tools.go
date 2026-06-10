@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nabkey/mcp-home/internal/hass"
 	"github.com/nabkey/mcp-home/internal/mcputil"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Tools holds the list tools and their configuration.

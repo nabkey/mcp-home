@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nabkey/mcp-home/internal/mcputil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/mcputil"
 )
 
 // Tools holds media management tools for Sonarr and Radarr.
