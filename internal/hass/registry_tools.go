@@ -51,6 +51,7 @@ func (t *Tools) registerManageRegistry(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "manage_registry",
 		Description: "Create, update, or delete entries in the Home Assistant area/entity/device/label/floor registries. Use this to organize the home: assign entities to areas, rename, apply labels, place areas on floors. Reads are done with get_home_registry.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args manageRegistryArgs) (*mcp.CallToolResult, any, error) {
 		kind := strings.ToLower(strings.TrimSpace(args.Kind))
 		spec, ok := registrySpecs[kind]

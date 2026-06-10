@@ -31,6 +31,7 @@ type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
+	policy     *ServicePolicy
 }
 
 // NewClient creates a new Home Assistant client.
@@ -52,6 +53,10 @@ func NewClient(baseURL, token string) (*Client, error) {
 		},
 	}, nil
 }
+
+// SetServicePolicy installs a deny policy enforced by CallService and
+// execute_script sequences. A nil policy allows everything.
+func (c *Client) SetServicePolicy(p *ServicePolicy) { c.policy = p }
 
 // State represents a Home Assistant entity state.
 type State struct {
@@ -162,6 +167,9 @@ func (c *Client) CallService(ctx context.Context, domain, service string, data m
 		return nil, err
 	}
 	if err := validate.Identifier("service", service); err != nil {
+		return nil, err
+	}
+	if err := c.policy.Check(domain, service); err != nil {
 		return nil, err
 	}
 

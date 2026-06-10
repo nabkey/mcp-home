@@ -35,8 +35,12 @@ func main() {
 		kong.Vars{"version": version},
 	)
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	logger.Info("mcp-server starting", "version", version)
+	var level slog.Level
+	// Kong's enum tag guarantees the value parses.
+	_ = level.UnmarshalText([]byte(cli.LogLevel))
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	logger.Info("mcp-server starting", "version", version, "log_level", level)
 
 	if err := run(cli, logger); err != nil {
 		log.Fatal(err)

@@ -38,6 +38,7 @@ func (t *Tools) registerGetLists(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_lists",
 		Description: "Retrieve all available to-do lists (e.g., shopping lists, task lists).",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getListsArgs) (*mcp.CallToolResult, any, error) {
 		lists, err := t.client.GetTodoLists(ctx)
 		if err != nil {
@@ -75,6 +76,7 @@ func (t *Tools) registerGetListItems(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_list_items",
 		Description: "Retrieve all items in a specific to-do list.",
+		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getListItemsArgs) (*mcp.CallToolResult, any, error) {
 		if args.EntityID == "" {
 			return mcputil.TextResult("Error: entity_id is required"), nil, nil
@@ -101,6 +103,7 @@ func (t *Tools) registerModifyListItem(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "modify_list_item",
 		Description: "Add, remove, or update items in a specific to-do list.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args modifyListItemArgs) (*mcp.CallToolResult, any, error) {
 		if args.EntityID == "" {
 			return mcputil.TextResult("Error: entity_id is required"), nil, nil

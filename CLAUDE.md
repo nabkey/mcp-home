@@ -31,7 +31,7 @@ golangci-lint run ./...
 mise run check
 ```
 
-Go 1.26.3 and golangci-lint are managed via mise (see `mise.toml`, which also defines `build`/`test`/`vet`/`lint`/`fmt`/`check` tasks). CI (`.github/workflows/ci.yml`) runs gofmt/vet/build/test (with `-race`) and golangci-lint on every PR; the publish workflow is gated on tests.
+Go 1.26.4 and golangci-lint are managed via mise (see `mise.toml`, which also defines `build`/`test`/`vet`/`lint`/`fmt`/`check` tasks). CI (`.github/workflows/ci.yml`) runs gofmt/vet/build/test (with `-race`) and golangci-lint on every PR; the publish workflow is gated on tests.
 
 ### Releases & container
 
@@ -45,10 +45,12 @@ All config is via environment variables (or CLI flags). Uses [Kong](https://gith
 
 **Tool integrations (optional groups):** Each group is all-or-nothing — partially setting a group (e.g., `HASS_URL` without `HASS_TOKEN`) produces a clear error at startup.
 
-- `HASS_URL`, `HASS_TOKEN` — Home Assistant
+- `HASS_URL`, `HASS_TOKEN` — Home Assistant; optional `HASS_DENY_SERVICES` (comma-separated `domain.service` patterns, `*` wildcards) refuses listed services in `call_home_service` and `execute_script`
 - `SONARR_URL`, `SONARR_API_KEY` — Sonarr (TV)
 - `RADARR_URL`, `RADARR_API_KEY` — Radarr (Movies)
 - `FRIGATE_URL` — Frigate NVR
+
+`LOG_LEVEL` (debug/info/warn/error) controls slog verbosity. Every tool call is audit-logged with the CF Access user via an MCP receiving middleware (`internal/server/audit.go`). All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
 
 Config struct definitions are in `internal/config/config.go`. Each optional group has `Enabled() bool` and `Validate() error` methods. Validation runs via Kong's `AfterApply` hook.
 

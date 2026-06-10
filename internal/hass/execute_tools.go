@@ -18,9 +18,13 @@ func (t *Tools) registerExecuteScript(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "execute_script",
 		Description: "Run an ad-hoc sequence of Home Assistant actions without creating a stored script. Useful for one-off multi-step actions (e.g. turn several things on in order with delays). For reusable logic, create a script with manage_scripts instead.",
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args executeScriptArgs) (*mcp.CallToolResult, any, error) {
 		if len(args.Sequence) == 0 {
 			return mcputil.TextResult("Error: sequence is required (a non-empty list of action steps)"), nil, nil
+		}
+		if err := t.client.policy.CheckSequence(args.Sequence); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
 		}
 
 		wsClient := t.client.NewWebsocketClient()
