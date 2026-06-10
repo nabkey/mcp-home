@@ -4,19 +4,20 @@ package server
 import (
 	"log/slog"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nabkey/mcp-home/internal/config"
 	"github.com/nabkey/mcp-home/internal/frigate"
 	"github.com/nabkey/mcp-home/internal/hass"
 	"github.com/nabkey/mcp-home/internal/lists"
 	"github.com/nabkey/mcp-home/internal/media"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // New creates a configured MCP server with tools registered based on cfg.
-func New(cfg config.CLI, logger *slog.Logger) *mcp.Server {
+// version is the build version injected into the binary (e.g. "1.4.0" or "dev").
+func New(cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "homeassistant",
-		Version: "0.1.0",
+		Name:    "mcp-home",
+		Version: version,
 	}, &mcp.ServerOptions{
 		Instructions: "Home Assistant MCP server. Provides tools to query and control smart home devices, manage automations and scripts, view event history, manage to-do lists, search/add media via Sonarr/Radarr, and view Frigate NVR cameras and detection events.",
 		Logger:       logger,
