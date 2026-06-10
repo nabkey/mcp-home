@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.1](https://github.com/nabkey/mcp-home/compare/v1.4.0...v1.4.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* address lint findings across the codebase ([13b5c80](https://github.com/nabkey/mcp-home/commit/13b5c80044488ded37b7917410ee34c1fc1e9269))
+* preserve base URL path prefixes and rate-limit Access cert refetches ([41f6ba7](https://github.com/nabkey/mcp-home/commit/41f6ba7d17be45194708fbaa8d14917b4b69a40b))
+* unbreak SSE streaming, shut down HTTP server on tunnel error, report real version ([b3500a5](https://github.com/nabkey/mcp-home/commit/b3500a51187a459a1d1e52c64179a6ac4bd07c77))
+
 ## [1.4.0](https://github.com/nabkey/mcp-home/compare/v1.3.1...v1.4.0) (2026-06-04)
 
 
