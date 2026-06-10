@@ -68,7 +68,9 @@ type Config struct {
 	Cameras map[string]CameraConfig `json:"cameras"`
 }
 
-func (c *Client) doRequest(ctx context.Context, method, path string, query url.Values, maxSize int64) ([]byte, error) {
+// doRequest performs a GET request against the Frigate API (all Frigate
+// endpoints used here are read-only).
+func (c *Client) doRequest(ctx context.Context, path string, query url.Values, maxSize int64) ([]byte, error) {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
@@ -79,7 +81,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 		u.RawQuery = query.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -104,7 +106,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 
 // GetConfig retrieves Frigate's configuration including camera list.
 func (c *Client) GetConfig(ctx context.Context) (*Config, error) {
-	body, err := c.doRequest(ctx, "GET", "/api/config", nil, maxJSONResponseSize)
+	body, err := c.doRequest(ctx, "/api/config", nil, maxJSONResponseSize)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +139,7 @@ func (c *Client) GetEvents(ctx context.Context, cameras []string, labels []strin
 		query.Set("after", fmt.Sprintf("%d", after.Unix()))
 	}
 
-	body, err := c.doRequest(ctx, "GET", "/api/events", query, maxJSONResponseSize)
+	body, err := c.doRequest(ctx, "/api/events", query, maxJSONResponseSize)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +158,7 @@ func (c *Client) GetLatestFrame(ctx context.Context, camera string) ([]byte, err
 		return nil, err
 	}
 	path := fmt.Sprintf("/api/%s/latest.jpg", camera)
-	return c.doRequest(ctx, "GET", path, nil, maxImageResponseSize)
+	return c.doRequest(ctx, path, nil, maxImageResponseSize)
 }
 
 // GetEventSnapshot retrieves the snapshot for a specific event.
@@ -165,5 +167,5 @@ func (c *Client) GetEventSnapshot(ctx context.Context, eventID string) ([]byte, 
 		return nil, err
 	}
 	path := fmt.Sprintf("/api/events/%s/snapshot.jpg", eventID)
-	return c.doRequest(ctx, "GET", path, nil, maxImageResponseSize)
+	return c.doRequest(ctx, path, nil, maxImageResponseSize)
 }

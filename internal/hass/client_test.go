@@ -13,7 +13,7 @@ import (
 
 // newTestClient builds a Client pointing at an httptest server. The handler is
 // expected to inspect the incoming request and return a canned response.
-func newTestClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
+func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -22,7 +22,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.S
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	return c, srv
+	return c
 }
 
 func assertAuth(t *testing.T, r *http.Request) {
@@ -33,7 +33,7 @@ func assertAuth(t *testing.T, r *http.Request) {
 }
 
 func TestGetServices(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		assertAuth(t, r)
 		if r.Method != "GET" || r.URL.Path != "/api/services" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -54,7 +54,7 @@ func TestGetServices(t *testing.T) {
 }
 
 func TestGetHistory(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		assertAuth(t, r)
 		if !strings.HasPrefix(r.URL.Path, "/api/history/period/") {
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -90,7 +90,7 @@ func TestGetHistory(t *testing.T) {
 }
 
 func TestRenderTemplate(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		assertAuth(t, r)
 		if r.Method != "POST" || r.URL.Path != "/api/template" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -116,7 +116,7 @@ func TestRenderTemplate(t *testing.T) {
 }
 
 func TestRenderTemplateRejectsEmpty(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request to %s", r.URL.Path)
 	})
 	if _, err := c.RenderTemplate(context.Background(), "", nil); err == nil {
@@ -131,7 +131,7 @@ func TestSceneCRUD(t *testing.T) {
 	}
 	var got []call
 
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		assertAuth(t, r)
 		got = append(got, call{r.Method, r.URL.Path})
 		_, _ = w.Write([]byte(`{"result":"ok"}`))
@@ -163,7 +163,7 @@ func TestSceneCRUD(t *testing.T) {
 }
 
 func TestSceneRejectsBadID(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 	})
 	if _, err := c.CreateScene(context.Background(), "../etc/passwd", map[string]any{}); err == nil {
@@ -175,7 +175,7 @@ func TestSceneRejectsBadID(t *testing.T) {
 }
 
 func TestGetCalendars(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		assertAuth(t, r)
 		if r.URL.Path != "/api/calendars" {
 			t.Errorf("path = %s", r.URL.Path)
@@ -193,7 +193,7 @@ func TestGetCalendars(t *testing.T) {
 }
 
 func TestGetCalendarEvents(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		assertAuth(t, r)
 		if r.URL.Path != "/api/calendars/calendar.work" {
 			t.Errorf("path = %s", r.URL.Path)
@@ -217,7 +217,7 @@ func TestGetCalendarEvents(t *testing.T) {
 }
 
 func TestGetCalendarEventsRequiresEntityID(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request: %s", r.URL.Path)
 	})
 	if _, err := c.GetCalendarEvents(context.Background(), "", time.Now(), time.Now().Add(time.Hour)); err == nil {
@@ -226,7 +226,7 @@ func TestGetCalendarEventsRequiresEntityID(t *testing.T) {
 }
 
 func TestCallServiceReportsParseError(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`not json`))
 	})
 	if _, err := c.CallService(context.Background(), "light", "turn_on", nil); err == nil {
@@ -235,7 +235,7 @@ func TestCallServiceReportsParseError(t *testing.T) {
 }
 
 func TestCallServiceEmptyBody(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	states, err := c.CallService(context.Background(), "light", "turn_on", nil)

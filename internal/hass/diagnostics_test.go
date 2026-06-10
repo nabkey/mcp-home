@@ -9,7 +9,7 @@ import (
 )
 
 func TestGetErrorLog(t *testing.T) {
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		assertAuth(t, r)
 		if r.Method != "GET" || r.URL.Path != "/api/error_log" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
