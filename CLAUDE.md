@@ -23,9 +23,15 @@ go test ./internal/hass -run TestFunctionName
 
 # Vet
 go vet ./...
+
+# Lint
+golangci-lint run ./...
+
+# Everything CI runs (format check, build, vet, test, lint)
+mise run check
 ```
 
-Go 1.26.3 is managed via mise (see `mise.toml`).
+Go 1.26.3 and golangci-lint are managed via mise (see `mise.toml`, which also defines `build`/`test`/`vet`/`lint`/`fmt`/`check` tasks). CI (`.github/workflows/ci.yml`) runs gofmt/vet/build/test (with `-race`) and golangci-lint on every PR; the publish workflow is gated on tests.
 
 ### Releases & container
 
