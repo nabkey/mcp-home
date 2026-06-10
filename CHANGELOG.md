@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/nabkey/mcp-home/compare/v1.4.1...v1.5.0) (2026-06-10)
+
+
+### Features
+
+* service deny list, per-user audit logging, tool annotations, --log-level ([b0c4f81](https://github.com/nabkey/mcp-home/commit/b0c4f8141ed89f81d164a6a8a162b3a11324caa9))
+
+
+### Bug Fixes
+
+* **deps:** update Go to 1.26.4 for stdlib vulnerability fixes ([4605e8f](https://github.com/nabkey/mcp-home/commit/4605e8f719d17d0861235694fefe4beb56150fd5))
+
 ## [1.4.1](https://github.com/nabkey/mcp-home/compare/v1.4.0...v1.4.1) (2026-06-10)
 
 
