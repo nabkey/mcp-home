@@ -224,3 +224,44 @@ func TestGetCalendarEventsRequiresEntityID(t *testing.T) {
 		t.Error("expected error for empty entity_id")
 	}
 }
+
+func TestCallServiceReportsParseError(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`not json`))
+	})
+	if _, err := c.CallService(context.Background(), "light", "turn_on", nil); err == nil {
+		t.Error("expected parse error for malformed service response")
+	}
+}
+
+func TestCallServiceEmptyBody(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	states, err := c.CallService(context.Background(), "light", "turn_on", nil)
+	if err != nil {
+		t.Fatalf("CallService: %v", err)
+	}
+	if states != nil {
+		t.Errorf("states = %v, want nil", states)
+	}
+}
+
+func TestBaseURLPathPrefix(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/homeassistant/api/states" {
+			t.Errorf("path = %s, want /homeassistant/api/states", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+
+	// Home Assistant served behind a reverse proxy at a subpath.
+	c, err := NewClient(srv.URL+"/homeassistant/", "test-token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := c.GetStates(context.Background()); err != nil {
+		t.Fatalf("GetStates: %v", err)
+	}
+}

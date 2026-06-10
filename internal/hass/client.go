@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nabkey/mcp-home/internal/validate"
 	"github.com/gorilla/websocket"
+	"github.com/nabkey/mcp-home/internal/validate"
 )
 
 const (
@@ -78,7 +78,8 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 	if err != nil {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
-	u.Path = path
+	// Append to any path prefix in the base URL (e.g. https://host/homeassistant).
+	u.Path = strings.TrimSuffix(u.Path, "/") + path
 	if query != nil {
 		u.RawQuery = query.Encode()
 	}
@@ -173,7 +174,7 @@ func (c *Client) CallService(ctx context.Context, domain, service string, data m
 	var states []State
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &states); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("failed to parse service response: %w", err)
 		}
 	}
 	return states, nil
@@ -241,6 +242,38 @@ func generateID() string {
 	return hex.EncodeToString(b)
 }
 
+// upsertConfig POSTs a config to /api/config/<kind>/config/<id> and returns
+// the decoded response, or a {"status": "ok", "id": id} placeholder when Home
+// Assistant returns an empty or non-object body.
+func (c *Client) upsertConfig(ctx context.Context, kind, id string, config map[string]any) (map[string]any, error) {
+	if err := validate.Identifier(kind+" id", id); err != nil {
+		return nil, err
+	}
+
+	path := fmt.Sprintf("/api/config/%s/config/%s", kind, id)
+	body, err := c.doRequest(ctx, "POST", path, nil, config)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(body) > 0 {
+		var response map[string]any
+		if err := json.Unmarshal(body, &response); err == nil {
+			return response, nil
+		}
+	}
+	return map[string]any{"status": "ok", "id": id}, nil
+}
+
+// deleteConfig deletes the config stored at /api/config/<kind>/config/<id>.
+func (c *Client) deleteConfig(ctx context.Context, kind, id string) error {
+	if err := validate.Identifier(kind+" id", id); err != nil {
+		return err
+	}
+	_, err := c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/config/%s/config/%s", kind, id), nil, nil)
+	return err
+}
+
 // CreateAutomation creates a new automation.
 func (c *Client) CreateAutomation(ctx context.Context, config map[string]any) (map[string]any, error) {
 	id, ok := config["id"].(string)
@@ -248,171 +281,47 @@ func (c *Client) CreateAutomation(ctx context.Context, config map[string]any) (m
 		id = generateID()
 		config["id"] = id
 	}
-	if err := validate.Identifier("automation id", id); err != nil {
-		return nil, err
-	}
-
-	path := fmt.Sprintf("/api/config/automation/config/%s", id)
-	body, err := c.doRequest(ctx, "POST", path, nil, config)
-	if err != nil {
-		return nil, err
-	}
-
-	var response map[string]any
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &response); err != nil {
-			return map[string]any{"status": "ok", "id": id}, nil
-		}
-	} else {
-		return map[string]any{"status": "ok", "id": id}, nil
-	}
-
-	return response, nil
+	return c.upsertConfig(ctx, "automation", id, config)
 }
 
 // UpdateAutomation updates an existing automation.
 func (c *Client) UpdateAutomation(ctx context.Context, id string, config map[string]any) (map[string]any, error) {
-	if err := validate.Identifier("automation id", id); err != nil {
-		return nil, err
-	}
-
-	path := fmt.Sprintf("/api/config/automation/config/%s", id)
-	body, err := c.doRequest(ctx, "POST", path, nil, config)
-	if err != nil {
-		return nil, err
-	}
-
-	var response map[string]any
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &response); err != nil {
-			return map[string]any{"status": "ok", "id": id}, nil
-		}
-	} else {
-		return map[string]any{"status": "ok", "id": id}, nil
-	}
-
-	return response, nil
+	return c.upsertConfig(ctx, "automation", id, config)
 }
 
 // DeleteAutomation deletes an automation.
 func (c *Client) DeleteAutomation(ctx context.Context, id string) error {
-	if err := validate.Identifier("automation id", id); err != nil {
-		return err
-	}
-	_, err := c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/config/automation/config/%s", id), nil, nil)
-	return err
+	return c.deleteConfig(ctx, "automation", id)
 }
 
 // CreateScript creates a new script with the given object_id.
 func (c *Client) CreateScript(ctx context.Context, objectID string, config map[string]any) (map[string]any, error) {
-	if err := validate.Identifier("script id", objectID); err != nil {
-		return nil, err
-	}
-
-	path := fmt.Sprintf("/api/config/script/config/%s", objectID)
-	body, err := c.doRequest(ctx, "POST", path, nil, config)
-	if err != nil {
-		return nil, err
-	}
-
-	var response map[string]any
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &response); err != nil {
-			return map[string]any{"status": "ok", "id": objectID}, nil
-		}
-	} else {
-		return map[string]any{"status": "ok", "id": objectID}, nil
-	}
-
-	return response, nil
+	return c.upsertConfig(ctx, "script", objectID, config)
 }
 
 // UpdateScript updates an existing script identified by its object_id.
 func (c *Client) UpdateScript(ctx context.Context, objectID string, config map[string]any) (map[string]any, error) {
-	if err := validate.Identifier("script id", objectID); err != nil {
-		return nil, err
-	}
-
-	path := fmt.Sprintf("/api/config/script/config/%s", objectID)
-	body, err := c.doRequest(ctx, "POST", path, nil, config)
-	if err != nil {
-		return nil, err
-	}
-
-	var response map[string]any
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &response); err != nil {
-			return map[string]any{"status": "ok", "id": objectID}, nil
-		}
-	} else {
-		return map[string]any{"status": "ok", "id": objectID}, nil
-	}
-
-	return response, nil
+	return c.upsertConfig(ctx, "script", objectID, config)
 }
 
 // DeleteScript deletes a script identified by its object_id.
 func (c *Client) DeleteScript(ctx context.Context, objectID string) error {
-	if err := validate.Identifier("script id", objectID); err != nil {
-		return err
-	}
-	_, err := c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/config/script/config/%s", objectID), nil, nil)
-	return err
+	return c.deleteConfig(ctx, "script", objectID)
 }
 
 // CreateScene creates a new scene.
 func (c *Client) CreateScene(ctx context.Context, objectID string, config map[string]any) (map[string]any, error) {
-	if err := validate.Identifier("scene id", objectID); err != nil {
-		return nil, err
-	}
-
-	path := fmt.Sprintf("/api/config/scene/config/%s", objectID)
-	body, err := c.doRequest(ctx, "POST", path, nil, config)
-	if err != nil {
-		return nil, err
-	}
-
-	var response map[string]any
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &response); err != nil {
-			return map[string]any{"status": "ok", "id": objectID}, nil
-		}
-	} else {
-		return map[string]any{"status": "ok", "id": objectID}, nil
-	}
-	return response, nil
+	return c.upsertConfig(ctx, "scene", objectID, config)
 }
 
 // UpdateScene updates an existing scene identified by its object_id.
 func (c *Client) UpdateScene(ctx context.Context, objectID string, config map[string]any) (map[string]any, error) {
-	if err := validate.Identifier("scene id", objectID); err != nil {
-		return nil, err
-	}
-
-	path := fmt.Sprintf("/api/config/scene/config/%s", objectID)
-	body, err := c.doRequest(ctx, "POST", path, nil, config)
-	if err != nil {
-		return nil, err
-	}
-
-	var response map[string]any
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &response); err != nil {
-			return map[string]any{"status": "ok", "id": objectID}, nil
-		}
-	} else {
-		return map[string]any{"status": "ok", "id": objectID}, nil
-	}
-	return response, nil
+	return c.upsertConfig(ctx, "scene", objectID, config)
 }
 
 // DeleteScene deletes a scene identified by its object_id.
 func (c *Client) DeleteScene(ctx context.Context, objectID string) error {
-	if err := validate.Identifier("scene id", objectID); err != nil {
-		return err
-	}
-	_, err := c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/config/scene/config/%s", objectID), nil, nil)
-	return err
+	return c.deleteConfig(ctx, "scene", objectID)
 }
 
 // GetServices retrieves the list of available services per domain.
@@ -486,13 +395,13 @@ type CalendarEntity struct {
 
 // CalendarEvent represents a single event from a calendar entity.
 type CalendarEvent struct {
-	Summary     string         `json:"summary"`
-	Start       map[string]any `json:"start,omitempty"`
-	End         map[string]any `json:"end,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Location    string         `json:"location,omitempty"`
-	UID         string         `json:"uid,omitempty"`
-	RecurrenceID string        `json:"recurrence_id,omitempty"`
+	Summary      string         `json:"summary"`
+	Start        map[string]any `json:"start,omitempty"`
+	End          map[string]any `json:"end,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	Location     string         `json:"location,omitempty"`
+	UID          string         `json:"uid,omitempty"`
+	RecurrenceID string         `json:"recurrence_id,omitempty"`
 }
 
 // GetCalendars returns the list of calendar entities.
@@ -543,16 +452,25 @@ func (c *Client) NewWebsocketClient() *WebsocketClient {
 	}
 }
 
-// WebsocketClient handles Home Assistant WebSocket API interactions.
+// WebsocketClient handles Home Assistant WebSocket API interactions. It is
+// scoped to a single request: Dial with the request context, issue commands,
+// then Close.
 type WebsocketClient struct {
 	baseURL string
 	token   string
 	conn    *websocket.Conn
 	idSeq   int64
+
+	// ctx is the context passed to Dial; pending reads are unblocked when it
+	// is cancelled.
+	ctx          context.Context
+	stopCtxWatch func() bool
 }
 
 // Dial connects and authenticates with the Home Assistant WebSocket API.
-func (c *WebsocketClient) Dial() error {
+// Cancelling ctx aborts the dial and unblocks any in-flight reads on the
+// connection.
+func (c *WebsocketClient) Dial(ctx context.Context) error {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return fmt.Errorf("invalid base URL: %w", err)
@@ -565,11 +483,17 @@ func (c *WebsocketClient) Dial() error {
 	u.Scheme = scheme
 	u.Path = "/api/websocket"
 
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial: %w", err)
 	}
 	c.conn = conn
+	c.ctx = ctx
+	// gorilla/websocket reads cannot take a context, so force any pending
+	// read to fail with an expired deadline when the request is cancelled.
+	c.stopCtxWatch = context.AfterFunc(ctx, func() {
+		_ = conn.SetReadDeadline(time.Now())
+	})
 
 	var authReq map[string]any
 	if err := c.conn.ReadJSON(&authReq); err != nil {
@@ -600,6 +524,9 @@ func (c *WebsocketClient) Dial() error {
 
 // Close closes the WebSocket connection.
 func (c *WebsocketClient) Close() error {
+	if c.stopCtxWatch != nil {
+		c.stopCtxWatch()
+	}
 	if c.conn != nil {
 		return c.conn.Close()
 	}
@@ -611,16 +538,28 @@ func (c *WebsocketClient) nextID() int {
 }
 
 // readResponse reads WebSocket messages until it finds one matching the given request ID.
-// It enforces a read deadline to prevent hanging forever.
+// It enforces a read deadline to prevent hanging forever and honors cancellation
+// of the context passed to Dial.
 func (c *WebsocketClient) readResponse(id int) (map[string]any, error) {
 	deadline := time.Now().Add(wsReadTimeout)
+	if c.ctx != nil {
+		if d, ok := c.ctx.Deadline(); ok && d.Before(deadline) {
+			deadline = d
+		}
+	}
 	for {
+		if c.ctx != nil && c.ctx.Err() != nil {
+			return nil, c.ctx.Err()
+		}
 		if err := c.conn.SetReadDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("failed to set read deadline: %w", err)
 		}
 
 		var resp map[string]any
 		if err := c.conn.ReadJSON(&resp); err != nil {
+			if c.ctx != nil && c.ctx.Err() != nil {
+				return nil, c.ctx.Err()
+			}
 			return nil, fmt.Errorf("failed to read response: %w", err)
 		}
 
@@ -634,87 +573,40 @@ func (c *WebsocketClient) readResponse(id int) (map[string]any, error) {
 	}
 }
 
-// GetAutomationConfig retrieves the raw configuration for a specific automation via WebSocket.
-func (c *WebsocketClient) GetAutomationConfig(entityID string) (map[string]any, error) {
-	id := c.nextID()
-	req := map[string]any{
-		"id":        id,
-		"type":      "automation/config",
-		"entity_id": entityID,
-	}
-
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send automation/config request: %w", err)
-	}
-
-	resp, err := c.readResponse(id)
+// getEntityConfig retrieves the raw configuration for an automation, script,
+// or scene entity via the "<domain>/config" WebSocket command.
+func (c *WebsocketClient) getEntityConfig(domain, entityID string) (map[string]any, error) {
+	resp, err := c.wsCommand(domain+"/config", map[string]any{"entity_id": entityID})
 	if err != nil {
-		return nil, fmt.Errorf("automation/config: %w", err)
+		return nil, err
 	}
-
 	result, ok := resp["result"].(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("unexpected automation/config result format")
+		return nil, fmt.Errorf("unexpected %s/config result format", domain)
 	}
 	return result, nil
+}
+
+// GetAutomationConfig retrieves the raw configuration for a specific automation via WebSocket.
+func (c *WebsocketClient) GetAutomationConfig(entityID string) (map[string]any, error) {
+	return c.getEntityConfig("automation", entityID)
 }
 
 // GetScriptConfig retrieves the raw configuration for a specific script via WebSocket.
 func (c *WebsocketClient) GetScriptConfig(entityID string) (map[string]any, error) {
-	id := c.nextID()
-	req := map[string]any{
-		"id":        id,
-		"type":      "script/config",
-		"entity_id": entityID,
-	}
-
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send script/config request: %w", err)
-	}
-
-	resp, err := c.readResponse(id)
-	if err != nil {
-		return nil, fmt.Errorf("script/config: %w", err)
-	}
-
-	result, ok := resp["result"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("unexpected script/config result format")
-	}
-	return result, nil
+	return c.getEntityConfig("script", entityID)
 }
 
 // TraceList returns a list of traces for an automation.
 func (c *WebsocketClient) TraceList(domain, itemID string) ([]map[string]any, error) {
-	id := c.nextID()
-	req := map[string]any{
-		"id":      id,
-		"type":    "trace/list",
+	resp, err := c.wsCommand("trace/list", map[string]any{
 		"domain":  domain,
 		"item_id": itemID,
-	}
-
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send trace/list request: %w", err)
-	}
-
-	resp, err := c.readResponse(id)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("trace/list: %w", err)
+		return nil, err
 	}
-
-	result, ok := resp["result"].([]any)
-	if !ok {
-		return []map[string]any{}, nil
-	}
-
-	traces := make([]map[string]any, 0, len(result))
-	for _, r := range result {
-		if m, ok := r.(map[string]any); ok {
-			traces = append(traces, m)
-		}
-	}
-	return traces, nil
+	return resultList(resp), nil
 }
 
 // HelperTypes lists the Home Assistant helper domains supported by the
@@ -746,34 +638,7 @@ func (c *WebsocketClient) ListHelpers(helperType string) ([]map[string]any, erro
 	if !IsHelperType(helperType) {
 		return nil, fmt.Errorf("unsupported helper type: %s", helperType)
 	}
-
-	id := c.nextID()
-	req := map[string]any{
-		"id":   id,
-		"type": helperType + "/list",
-	}
-
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send %s/list request: %w", helperType, err)
-	}
-
-	resp, err := c.readResponse(id)
-	if err != nil {
-		return nil, fmt.Errorf("%s/list: %w", helperType, err)
-	}
-
-	result, ok := resp["result"].([]any)
-	if !ok {
-		return []map[string]any{}, nil
-	}
-
-	helpers := make([]map[string]any, 0, len(result))
-	for _, r := range result {
-		if m, ok := r.(map[string]any); ok {
-			helpers = append(helpers, m)
-		}
-	}
-	return helpers, nil
+	return c.listResultMaps(helperType + "/list")
 }
 
 // CreateHelper creates a new helper of the given type. The config map should
@@ -783,32 +648,11 @@ func (c *WebsocketClient) CreateHelper(helperType string, config map[string]any)
 	if !IsHelperType(helperType) {
 		return nil, fmt.Errorf("unsupported helper type: %s", helperType)
 	}
-
-	id := c.nextID()
-	req := map[string]any{
-		"id":   id,
-		"type": helperType + "/create",
-	}
-	for k, v := range config {
-		if k == "id" || k == "type" {
-			continue
-		}
-		req[k] = v
-	}
-
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send %s/create request: %w", helperType, err)
-	}
-
-	resp, err := c.readResponse(id)
+	resp, err := c.wsCommand(helperType+"/create", config)
 	if err != nil {
-		return nil, fmt.Errorf("%s/create: %w", helperType, err)
+		return nil, err
 	}
-
-	if result, ok := resp["result"].(map[string]any); ok {
-		return result, nil
-	}
-	return map[string]any{}, nil
+	return resultMap(resp), nil
 }
 
 // UpdateHelper updates an existing helper. helperID is the helper's storage ID
@@ -821,33 +665,19 @@ func (c *WebsocketClient) UpdateHelper(helperType, helperID string, config map[s
 		return nil, err
 	}
 
-	id := c.nextID()
 	idField := helperType + "_id"
-	req := map[string]any{
-		"id":    id,
-		"type":  helperType + "/update",
-		idField: helperID,
-	}
+	fields := map[string]any{idField: helperID}
 	for k, v := range config {
-		if k == "id" || k == "type" || k == idField {
+		if k == idField {
 			continue
 		}
-		req[k] = v
+		fields[k] = v
 	}
-
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send %s/update request: %w", helperType, err)
-	}
-
-	resp, err := c.readResponse(id)
+	resp, err := c.wsCommand(helperType+"/update", fields)
 	if err != nil {
-		return nil, fmt.Errorf("%s/update: %w", helperType, err)
+		return nil, err
 	}
-
-	if result, ok := resp["result"].(map[string]any); ok {
-		return result, nil
-	}
-	return map[string]any{}, nil
+	return resultMap(resp), nil
 }
 
 // DeleteHelper deletes a helper. helperID is the helper's storage ID
@@ -859,45 +689,17 @@ func (c *WebsocketClient) DeleteHelper(helperType, helperID string) error {
 	if err := validate.Identifier("helper id", helperID); err != nil {
 		return err
 	}
-
-	id := c.nextID()
-	req := map[string]any{
-		"id":               id,
-		"type":             helperType + "/delete",
-		helperType + "_id": helperID,
-	}
-
-	if err := c.conn.WriteJSON(req); err != nil {
-		return fmt.Errorf("failed to send %s/delete request: %w", helperType, err)
-	}
-
-	if _, err := c.readResponse(id); err != nil {
-		return fmt.Errorf("%s/delete: %w", helperType, err)
-	}
-	return nil
+	_, err := c.wsCommand(helperType+"/delete", map[string]any{helperType + "_id": helperID})
+	return err
 }
 
 // listResultMaps sends a WebSocket command that returns an array of objects and decodes the result.
 func (c *WebsocketClient) listResultMaps(commandType string) ([]map[string]any, error) {
-	id := c.nextID()
-	if err := c.conn.WriteJSON(map[string]any{"id": id, "type": commandType}); err != nil {
-		return nil, fmt.Errorf("failed to send %s request: %w", commandType, err)
-	}
-	resp, err := c.readResponse(id)
+	resp, err := c.wsCommand(commandType, nil)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", commandType, err)
+		return nil, err
 	}
-	result, ok := resp["result"].([]any)
-	if !ok {
-		return []map[string]any{}, nil
-	}
-	out := make([]map[string]any, 0, len(result))
-	for _, r := range result {
-		if m, ok := r.(map[string]any); ok {
-			out = append(out, m)
-		}
-	}
-	return out, nil
+	return resultList(resp), nil
 }
 
 // wsCommand sends a WebSocket command of the given type with the supplied
@@ -984,24 +786,7 @@ func (c *WebsocketClient) ListFloors() ([]map[string]any, error) {
 
 // GetSceneConfig retrieves the raw configuration for a specific scene via WebSocket.
 func (c *WebsocketClient) GetSceneConfig(entityID string) (map[string]any, error) {
-	id := c.nextID()
-	req := map[string]any{
-		"id":        id,
-		"type":      "scene/config",
-		"entity_id": entityID,
-	}
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send scene/config request: %w", err)
-	}
-	resp, err := c.readResponse(id)
-	if err != nil {
-		return nil, fmt.Errorf("scene/config: %w", err)
-	}
-	result, ok := resp["result"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("unexpected scene/config result format")
-	}
-	return result, nil
+	return c.getEntityConfig("scene", entityID)
 }
 
 // StatisticsDuringPeriod returns long-term statistics for the given statistic_ids in [start, end].
@@ -1014,51 +799,31 @@ func (c *WebsocketClient) StatisticsDuringPeriod(start, end time.Time, statistic
 	if period == "" {
 		period = "hour"
 	}
-	id := c.nextID()
-	req := map[string]any{
-		"id":            id,
-		"type":          "recorder/statistics_during_period",
+	fields := map[string]any{
 		"start_time":    start.UTC().Format(time.RFC3339),
 		"statistic_ids": statisticIDs,
 		"period":        period,
 	}
 	if !end.IsZero() {
-		req["end_time"] = end.UTC().Format(time.RFC3339)
+		fields["end_time"] = end.UTC().Format(time.RFC3339)
 	}
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send recorder/statistics_during_period request: %w", err)
-	}
-	resp, err := c.readResponse(id)
+	resp, err := c.wsCommand("recorder/statistics_during_period", fields)
 	if err != nil {
-		return nil, fmt.Errorf("recorder/statistics_during_period: %w", err)
+		return nil, err
 	}
-	result, ok := resp["result"].(map[string]any)
-	if !ok {
-		return map[string]any{}, nil
-	}
-	return result, nil
+	return resultMap(resp), nil
 }
 
 // TraceGet returns full details for a specific trace.
 func (c *WebsocketClient) TraceGet(domain, itemID, runID string) (map[string]any, error) {
-	id := c.nextID()
-	req := map[string]any{
-		"id":      id,
-		"type":    "trace/get",
+	resp, err := c.wsCommand("trace/get", map[string]any{
 		"domain":  domain,
 		"item_id": itemID,
 		"run_id":  runID,
-	}
-
-	if err := c.conn.WriteJSON(req); err != nil {
-		return nil, fmt.Errorf("failed to send trace/get request: %w", err)
-	}
-
-	resp, err := c.readResponse(id)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("trace/get: %w", err)
+		return nil, err
 	}
-
 	result, ok := resp["result"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("unexpected trace/get result format")

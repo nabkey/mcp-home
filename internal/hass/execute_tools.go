@@ -3,8 +3,8 @@ package hass
 import (
 	"context"
 
-	"github.com/nabkey/mcp-home/internal/mcputil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/mcputil"
 )
 
 // --- execute_script ---
@@ -24,7 +24,7 @@ func (t *Tools) registerExecuteScript(server *mcp.Server) {
 		}
 
 		wsClient := t.client.NewWebsocketClient()
-		if err := wsClient.Dial(); err != nil {
+		if err := wsClient.Dial(ctx); err != nil {
 			return mcputil.Errorf("connecting: %v", err), nil, nil
 		}
 		defer func() { _ = wsClient.Close() }()
