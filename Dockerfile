@@ -16,11 +16,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/mcp-server ./cmd/mcp-server
 
-# Pin to a specific release by overriding CLOUDFLARED_URL, e.g.
-#   --build-arg CLOUDFLARED_URL=https://github.com/cloudflare/cloudflared/releases/download/2025.10.0
-FROM --platform=$BUILDPLATFORM alpine:3.20 AS cloudflared
+# Pinned for reproducible builds; Dependabot does not track this, so bump
+# CLOUDFLARED_VERSION when updating. Override either arg at build time, e.g.
+#   --build-arg CLOUDFLARED_VERSION=2026.6.0
+FROM --platform=$BUILDPLATFORM alpine:3.24 AS cloudflared
 ARG TARGETARCH
-ARG CLOUDFLARED_URL=https://github.com/cloudflare/cloudflared/releases/latest/download
+ARG CLOUDFLARED_VERSION=2026.6.0
+ARG CLOUDFLARED_URL=https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}
 ADD --chmod=0755 ${CLOUDFLARED_URL}/cloudflared-linux-${TARGETARCH} /cloudflared
 
 FROM gcr.io/distroless/static-debian12:nonroot
