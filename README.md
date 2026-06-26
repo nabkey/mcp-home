@@ -1,6 +1,6 @@
 # mcp-home
 
-A Go [MCP](https://modelcontextprotocol.io) server for smart home and media management. Connects Claude to Home Assistant, Sonarr, Radarr, and Frigate NVR over a Cloudflare Tunnel with Cloudflare Access authentication.
+A Go [MCP](https://modelcontextprotocol.io) server for smart home and media management. Connects Claude to Home Assistant, Sonarr, Radarr, Frigate NVR, and ESPHome over a Cloudflare Tunnel with Cloudflare Access authentication.
 
 ## How it works
 
@@ -25,6 +25,8 @@ All tool groups are optional. The server registers only what's configured and st
 **Media** — search and add movies (Radarr) and TV series (Sonarr), check download queue status
 
 **Frigate NVR** — list cameras, get live snapshots, query detection events, get event snapshots
+
+**ESPHome** — list dashboard devices and secret key names; read/write device YAML, includes, and secrets; validate, compile, and OTA-upload firmware; capture live device logs
 
 The full tool catalog with per-tool descriptions is in [CLAUDE.md](CLAUDE.md#mcp-tools-provided).
 
@@ -59,6 +61,7 @@ All configuration is via environment variables (see `.env.example`) or CLI flags
 | Sonarr | `SONARR_URL`, `SONARR_API_KEY` | No |
 | Radarr | `RADARR_URL`, `RADARR_API_KEY` | No |
 | Frigate | `FRIGATE_URL` | No |
+| ESPHome | `ESPHOME_URL` (optional `ESPHOME_PASSWORD`) | No |
 
 Pass `--insecure` to disable authentication for local development. `LOG_LEVEL` (`debug`, `info`, `warn`, `error`) controls log verbosity.
 

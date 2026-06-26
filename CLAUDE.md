@@ -49,6 +49,7 @@ All config is via environment variables (or CLI flags). Uses [Kong](https://gith
 - `SONARR_URL`, `SONARR_API_KEY` — Sonarr (TV)
 - `RADARR_URL`, `RADARR_API_KEY` — Radarr (Movies)
 - `FRIGATE_URL` — Frigate NVR
+- `ESPHOME_URL` — ESPHome dashboard (the HA ESPHome add-on); optional `ESPHOME_PASSWORD` if the dashboard has auth enabled
 
 `LOG_LEVEL` (debug/info/warn/error) controls slog verbosity. Every tool call is audit-logged with the CF Access user via an MCP receiving middleware (`internal/server/audit.go`). All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
 
@@ -92,6 +93,7 @@ Clients connect directly to `https://CF_HOSTNAME/mcp`. Cloudflare Access acts as
 - `internal/lists/` — To-do list management tools. Depends on the HA client.
 - `internal/media/` — Sonarr/Radarr client and MCP tools.
 - `internal/frigate/` — Frigate NVR client and MCP tools.
+- `internal/esphome/` — ESPHome dashboard client (HTTP + WebSocket command channels) and MCP tools.
 
 ### MCP Tool Registration Pattern
 
@@ -108,6 +110,7 @@ Each integration has its own client that handles HTTP/WebSocket communication:
 - **Sonarr** (`SONARR_URL`, `SONARR_API_KEY`) — `/api/v3/` endpoints, `X-Api-Key` header auth.
 - **Radarr** (`RADARR_URL`, `RADARR_API_KEY`) — Same *arr API pattern as Sonarr.
 - **Frigate** (`FRIGATE_URL`) — No auth, REST API for config, events, and JPEG snapshots.
+- **ESPHome** (`ESPHOME_URL`, optional `ESPHOME_PASSWORD`) — ESPHome dashboard. REST for the device list, secret key names, file read/write (`/edit`), and firmware download (`/download.bin`); WebSocket command channels (`/validate`, `/compile`, `/upload`, `/logs`) that stream the `esphome` CLI as `line`/`exit` events. Optional cookie login (`/login`) cached via `sync.Once` and reused for both HTTP and WS.
 
 All tool sets are optional — the server registers only what's configured and starts even with zero tools.
 
@@ -174,3 +177,17 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `get_camera_snapshot` | Get current camera frame as JPEG |
 | `get_frigate_events` | Recent detection events (person, car, etc.) |
 | `get_event_snapshot` | Get snapshot for a specific detection event |
+
+**ESPHome** (requires `ESPHOME_URL`):
+
+| Tool | Description |
+|------|-------------|
+| `list_esphome_devices` | List dashboard devices with config file, address, online status, versions |
+| `list_esphome_secrets` | List shared secrets.yaml key names (never values) |
+| `read_esphome_file` | Read a config-dir file (device YAML, include, secrets.yaml) |
+| `write_esphome_file` | Create/overwrite a config-dir file (push YAML + includes) |
+| `validate_esphome` | Validate a config without building |
+| `compile_esphome` | Build firmware without flashing; returns build output + exit status |
+| `upload_esphome` | Compile and flash a device (OTA by default; destructive) |
+| `download_esphome_binary` | Confirm a built image exists; report size + SHA-256 |
+| `get_esphome_logs` | Capture live device logs for a bounded duration |

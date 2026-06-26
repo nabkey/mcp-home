@@ -18,6 +18,7 @@ type CLI struct {
 	Sonarr     SonarrConfig     `embed:"" prefix:"sonarr-"  envprefix:"SONARR_"`
 	Radarr     RadarrConfig     `embed:"" prefix:"radarr-"  envprefix:"RADARR_"`
 	Frigate    FrigateConfig    `embed:"" prefix:"frigate-" envprefix:"FRIGATE_"`
+	ESPHome    ESPHomeConfig    `embed:"" prefix:"esphome-" envprefix:"ESPHOME_"`
 	Version    kong.VersionFlag `short:"V" help:"Print version and exit."`
 }
 
@@ -105,6 +106,15 @@ type FrigateConfig struct {
 
 // Enabled returns true if Frigate is configured.
 func (c FrigateConfig) Enabled() bool { return c.URL != "" }
+
+// ESPHomeConfig holds optional ESPHome dashboard settings.
+type ESPHomeConfig struct {
+	URL      string `env:"URL"      help:"ESPHome dashboard URL (e.g. http://homeassistant.local:6052)"`
+	Password string `env:"PASSWORD" help:"ESPHome dashboard password (only if dashboard auth is enabled)"`
+}
+
+// Enabled returns true if the ESPHome dashboard URL is configured.
+func (c ESPHomeConfig) Enabled() bool { return c.URL != "" }
 
 // validateAllOrNothing checks that either all fields are set or none are.
 func validateAllOrNothing(name string, fields map[string]string) error {
