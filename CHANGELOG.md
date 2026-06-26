@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/nabkey/mcp-home/compare/v1.5.0...v1.6.0) (2026-06-26)
+
+
+### Features
+
+* add ESPHome dashboard integration group ([#25](https://github.com/nabkey/mcp-home/issues/25)) ([b839eae](https://github.com/nabkey/mcp-home/commit/b839eae67c0bba7ea6614a988dcfff25bbf89b89))
+
 ## [1.5.0](https://github.com/nabkey/mcp-home/compare/v1.4.1...v1.5.0) (2026-06-10)
 
 
