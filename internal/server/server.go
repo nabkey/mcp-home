@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nabkey/mcp-home/internal/config"
+	"github.com/nabkey/mcp-home/internal/esphome"
 	"github.com/nabkey/mcp-home/internal/frigate"
 	"github.com/nabkey/mcp-home/internal/hass"
 	"github.com/nabkey/mcp-home/internal/lists"
@@ -19,7 +20,7 @@ func New(cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
 		Name:    "mcp-home",
 		Version: version,
 	}, &mcp.ServerOptions{
-		Instructions: "Home Assistant MCP server. Provides tools to query and control smart home devices, manage automations and scripts, view event history, manage to-do lists, search/add media via Sonarr/Radarr, and view Frigate NVR cameras and detection events.",
+		Instructions: "Home Assistant MCP server. Provides tools to query and control smart home devices, manage automations and scripts, view event history, manage to-do lists, search/add media via Sonarr/Radarr, view Frigate NVR cameras and detection events, and manage ESPHome devices (read/write configs, validate, compile, OTA upload, logs).",
 		Logger:       logger,
 	})
 
@@ -72,6 +73,18 @@ func New(cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
 		}
 	} else {
 		logger.Info("Frigate not configured, skipping")
+	}
+
+	if cfg.ESPHome.Enabled() {
+		esphomeTools, err := esphome.NewTools(cfg.ESPHome.URL, cfg.ESPHome.Password)
+		if err != nil {
+			logger.Warn("ESPHome tools failed", "error", err)
+		} else {
+			esphomeTools.Register(server)
+			logger.Info("ESPHome tools registered")
+		}
+	} else {
+		logger.Info("ESPHome not configured, skipping")
 	}
 
 	return server

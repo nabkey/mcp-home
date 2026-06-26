@@ -1,0 +1,300 @@
+package esphome
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/mcputil"
+	"github.com/nabkey/mcp-home/internal/validate"
+)
+
+const (
+	// defaultLogSeconds bounds a logs stream when the caller omits a duration.
+	defaultLogSeconds = 30
+	// maxLogSeconds caps how long a logs stream may run.
+	maxLogSeconds = 120
+	// displayTail is how much trailing command output to surface inline.
+	displayTail = 8000
+)
+
+// Tools holds ESPHome dashboard tools.
+type Tools struct {
+	client *Client
+}
+
+// NewTools creates ESPHome tools targeting the dashboard at url. password is
+// optional (only needed if the dashboard has auth enabled).
+func NewTools(url, password string) (*Tools, error) {
+	client, err := NewClient(url, password)
+	if err != nil {
+		return nil, err
+	}
+	return &Tools{client: client}, nil
+}
+
+// Register adds all ESPHome tools to the given MCP server.
+func (t *Tools) Register(server *mcp.Server) {
+	t.registerListDevices(server)
+	t.registerListSecrets(server)
+	t.registerReadFile(server)
+	t.registerWriteFile(server)
+	t.registerValidate(server)
+	t.registerCompile(server)
+	t.registerUpload(server)
+	t.registerDownload(server)
+	t.registerLogs(server)
+}
+
+// --- list_esphome_devices ---
+
+func (t *Tools) registerListDevices(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_esphome_devices",
+		Description: "List the devices configured in the ESPHome dashboard, with their configuration file, address, online status, and installed/available versions.",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		devices, err := t.client.ListDevices(ctx)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		return mcputil.JSONResult(map[string]any{
+			"devices": devices,
+			"count":   len(devices),
+		})
+	})
+}
+
+// --- list_esphome_secrets ---
+
+func (t *Tools) registerListSecrets(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_esphome_secrets",
+		Description: "List the key NAMES (never the values) defined in the ESPHome dashboard's shared secrets.yaml. Use this to check whether the keys a config references (e.g. wifi_ssid, wifi_password) already exist before pushing the config.",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		keys, err := t.client.SecretKeys(ctx)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		sort.Strings(keys)
+		return mcputil.JSONResult(map[string]any{
+			"keys":  keys,
+			"count": len(keys),
+		})
+	})
+}
+
+// --- read_esphome_file ---
+
+type readFileArgs struct {
+	File string `json:"file" jsonschema:"Name of a file in the ESPHome config directory (e.g. pump.yaml, pentair.h, secrets.yaml)"`
+}
+
+func (t *Tools) registerReadFile(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "read_esphome_file",
+		Description: "Read a file from the ESPHome dashboard config directory (a device YAML, an included header, or secrets.yaml).",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args readFileArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("file", args.File); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		content, err := t.client.ReadFile(ctx, args.File)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		return mcputil.TextResult(content), nil, nil
+	})
+}
+
+// --- write_esphome_file ---
+
+type writeFileArgs struct {
+	File    string `json:"file" jsonschema:"Name of the file to write in the ESPHome config directory (e.g. pump.yaml, pentair.h). Writing secrets.yaml overwrites the SHARED secrets file — append manually instead of replacing it."`
+	Content string `json:"content" jsonschema:"Full contents to write. This overwrites the file."`
+}
+
+func (t *Tools) registerWriteFile(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "write_esphome_file",
+		Description: "Create or overwrite a file in the ESPHome dashboard config directory. Use to push a device YAML and its included headers. Caution: writing secrets.yaml replaces the dashboard's shared secrets for ALL devices.",
+		Annotations: mcputil.Additive(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args writeFileArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("file", args.File); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		if args.Content == "" {
+			return mcputil.Errorf("content is required"), nil, nil
+		}
+		if err := t.client.WriteFile(ctx, args.File, args.Content); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		return mcputil.TextResult(fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), args.File)), nil, nil
+	})
+}
+
+// --- validate_esphome ---
+
+type configArgs struct {
+	Config string `json:"config" jsonschema:"The device configuration filename (e.g. pump.yaml)"`
+}
+
+func (t *Tools) registerValidate(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "validate_esphome",
+		Description: "Validate an ESPHome device configuration without building it. Fast way to catch YAML/schema errors before compiling.",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args configArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("config", args.Config); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		res, err := t.client.Validate(ctx, args.Config)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		return commandResult(res), nil, nil
+	})
+}
+
+// --- compile_esphome ---
+
+func (t *Tools) registerCompile(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "compile_esphome",
+		Description: "Compile (build) the firmware for an ESPHome device configuration without flashing. Returns build output and exit status. May take several minutes on the first build.",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args configArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("config", args.Config); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		res, err := t.client.Compile(ctx, args.Config)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		return commandResult(res), nil, nil
+	})
+}
+
+// --- upload_esphome ---
+
+type uploadArgs struct {
+	Config string `json:"config" jsonschema:"The device configuration filename (e.g. pump.yaml)"`
+	Port   string `json:"port,omitempty" jsonschema:"Upload target: OTA (default, flashes over Wi-Fi to a device already running ESPHome) or a serial device path on the dashboard host. First-ever flash of a blank board needs USB and cannot be done over the network."`
+}
+
+func (t *Tools) registerUpload(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "upload_esphome",
+		Description: "Compile and flash an ESPHome device. Defaults to an over-the-air (OTA) upload, which requires the device to already be running ESPHome and reachable on the network. The very first flash of a new board must be done over USB (see download_esphome_binary / web.esphome.io) and cannot go through this tool.",
+		Annotations: mcputil.Destructive(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args uploadArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("config", args.Config); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		res, err := t.client.Upload(ctx, args.Config, args.Port)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		return commandResult(res), nil, nil
+	})
+}
+
+// --- get_esphome_logs ---
+
+type logsArgs struct {
+	Config         string `json:"config" jsonschema:"The device configuration filename (e.g. pump.yaml)"`
+	Port           string `json:"port,omitempty" jsonschema:"Log source: OTA (default, over the network) or a serial device path on the dashboard host"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"How long to capture logs before returning (default 30, max 120). Device logs stream continuously, so this bounds the call."`
+}
+
+func (t *Tools) registerLogs(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_esphome_logs",
+		Description: "Capture live logs from a running ESPHome device for a bounded duration, then return them. Use to verify behavior after flashing (e.g. confirm the pump RS-485 traffic).",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args logsArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("config", args.Config); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		secs := args.TimeoutSeconds
+		if secs <= 0 {
+			secs = defaultLogSeconds
+		}
+		if secs > maxLogSeconds {
+			secs = maxLogSeconds
+		}
+		logCtx, cancel := context.WithTimeout(ctx, time.Duration(secs)*time.Second)
+		defer cancel()
+		res, err := t.client.Logs(logCtx, args.Config, args.Port)
+		if err != nil && res == nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		return commandResult(res), nil, nil
+	})
+}
+
+// commandResult renders a streamed command outcome as a JSON result, trimming
+// the captured output to its tail for inline display.
+func commandResult(res *CommandResult) *mcp.CallToolResult {
+	out := map[string]any{
+		"output":    tail(res.Output, displayTail),
+		"truncated": res.Truncated || len(res.Output) > displayTail,
+	}
+	if res.ExitCode != nil {
+		out["exit_code"] = *res.ExitCode
+		out["success"] = *res.ExitCode == 0
+	}
+	if res.TimedOut {
+		out["timed_out"] = true
+	}
+	result, _, _ := mcputil.JSONResult(out)
+	return result
+}
+
+// tail returns the last n bytes of s, prefixed with an elision marker if cut.
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "...(earlier output truncated)...\n" + s[len(s)-n:]
+}
+
+// --- download_esphome_binary ---
+
+type downloadArgs struct {
+	Config  string `json:"config" jsonschema:"The device configuration filename (e.g. pump.yaml)"`
+	Factory bool   `json:"factory,omitempty" jsonschema:"Request the factory image (full flash, for a first USB flash) instead of the OTA image. Default false."`
+}
+
+func (t *Tools) registerDownload(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "download_esphome_binary",
+		Description: "Confirm a compiled firmware image exists and report its size and SHA-256. The image itself is not flashable through MCP; for a first USB flash, open the ESPHome dashboard's download or web.esphome.io. Set factory=true for the full-flash image used on a blank board.",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args downloadArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("config", args.Config); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		fileType := ""
+		if args.Factory {
+			fileType = "firmware-factory.bin"
+		}
+		data, err := t.client.DownloadBinary(ctx, args.Config, fileType)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		sum := sha256.Sum256(data)
+		return mcputil.JSONResult(map[string]any{
+			"config":     args.Config,
+			"factory":    args.Factory,
+			"size_bytes": len(data),
+			"sha256":     hex.EncodeToString(sum[:]),
+			"note":       "Binary verified downloadable from the dashboard. For a first USB flash, use the dashboard download or https://web.esphome.io; OTA updates can use upload_esphome.",
+		})
+	})
+}
