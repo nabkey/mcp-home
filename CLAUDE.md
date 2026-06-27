@@ -110,7 +110,7 @@ Each integration has its own client that handles HTTP/WebSocket communication:
 - **Sonarr** (`SONARR_URL`, `SONARR_API_KEY`) — `/api/v3/` endpoints, `X-Api-Key` header auth.
 - **Radarr** (`RADARR_URL`, `RADARR_API_KEY`) — Same *arr API pattern as Sonarr.
 - **Frigate** (`FRIGATE_URL`) — No auth, REST API for config, events, and JPEG snapshots.
-- **ESPHome** (`ESPHOME_URL`, optional `ESPHOME_PASSWORD`) — ESPHome Device Builder dashboard. Most operations go over the single multiplexed `/ws` command socket (`{command, message_id, args}` → `ResultMessage` / streaming `EventMessage{event:"output"|"result"}` / `ErrorMessage`): `devices/list`, `config/get_secrets`, `devices/get_config`, `devices/update_config` (falls back to `devices/create` on `not_found`), `devices/validate`, `devices/logs`, `firmware/get_binaries` + `firmware/download_token` (binary then fetched over HTTP `/api/firmware/download?token=`). Compile and upload use the still-supported legacy spawn-protocol WebSockets (`/compile`, `/upload`) that stream `line`/`exit` events. Auth: a dashboard reporting `requires_auth` gets an `auth/login` handshake on `/ws` (or HTTP Basic on the legacy spawn sockets); an add-on on its exposed port reports `requires_auth: false`.
+- **ESPHome** (`ESPHOME_URL`, optional `ESPHOME_PASSWORD`) — ESPHome Device Builder dashboard. All operations go over the single multiplexed `/ws` command socket (`{command, message_id, args}` → `ResultMessage` / streaming `EventMessage{event:"output"|"result"}` / `ErrorMessage`): `devices/list`, `config/get_secrets`, `devices/get_config`, `devices/update_config` (falls back to `devices/create` on `not_found`), `devices/validate` and `devices/logs` (streaming), `firmware/get_binaries` + `firmware/download_token` (binary then fetched over HTTP `/api/firmware/download?token=`). Compile and upload can run for minutes — longer than an MCP request stays open — so they use the dashboard's **async job queue**: `firmware/compile` / `firmware/upload` return a `FirmwareJob` immediately, and the caller polls `firmware/get_job` until the job is terminal (`completed`/`failed`/`cancelled`). This is the same poll pattern the MCP Tasks extension would model at the protocol layer, done at the application layer because the go-sdk in use doesn't implement Tasks yet. Auth: a dashboard reporting `requires_auth` gets an `auth/login` handshake on `/ws`; an add-on on its exposed port reports `requires_auth: false`.
 
 All tool sets are optional — the server registers only what's configured and starts even with zero tools.
 
@@ -186,8 +186,9 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `list_esphome_secrets` | List shared secrets.yaml key names (never values) |
 | `read_esphome_file` | Read a config-dir file (device YAML, include, secrets.yaml) |
 | `write_esphome_file` | Create/overwrite a config-dir file (push YAML + includes) |
-| `validate_esphome` | Validate a config without building |
-| `compile_esphome` | Build firmware without flashing; returns build output + exit status |
-| `upload_esphome` | Compile and flash a device (OTA by default; destructive) |
+| `validate_esphome` | Validate a config without building (streaming) |
+| `compile_esphome` | Queue a firmware build; returns a `job_id` immediately (async) |
+| `upload_esphome` | Queue an OTA flash of the latest build; returns a `job_id` (async, destructive) |
+| `get_esphome_job` | Poll a compile/upload job's status, progress, and output |
 | `download_esphome_binary` | Confirm a built image exists; report size + SHA-256 |
 | `get_esphome_logs` | Capture live device logs for a bounded duration |

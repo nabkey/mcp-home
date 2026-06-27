@@ -350,83 +350,107 @@ func TestAuthRequiredNoPassword(t *testing.T) {
 	}
 }
 
-// --- legacy spawn (compile/upload) ---
+// --- async firmware jobs (compile/upload/get_job) ---
 
-func spawnServer(t *testing.T, path string, lines []string, code int) *httptest.Server {
-	t.Helper()
-	up := websocket.Upgrader{}
-	mux := http.NewServeMux()
-	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-		conn, err := up.Upgrade(w, r, nil)
-		if err != nil {
-			return
+func TestCompileEnqueue(t *testing.T) {
+	srv := wsDashboard(t, false, func(sc *srvConn, c command) {
+		if c.Command != "firmware/compile" || c.Args["configuration"] != "pump.yaml" {
+			t.Errorf("unexpected: %s %v", c.Command, c.Args)
 		}
-		defer func() { _ = conn.Close() }()
-		var spawn map[string]any
-		if err := conn.ReadJSON(&spawn); err != nil {
-			return
-		}
-		if spawn["type"] != "spawn" {
-			t.Errorf("spawn type = %v", spawn["type"])
-		}
-		for _, ln := range lines {
-			_ = conn.WriteJSON(map[string]any{"event": "line", "data": ln})
-		}
-		_ = conn.WriteJSON(map[string]any{"event": "exit", "code": code})
+		sc.result(c.MessageID, map[string]any{
+			"job_id": "job-1", "configuration": "pump.yaml",
+			"job_type": "compile", "status": "queued",
+		})
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-func TestCompileSpawn(t *testing.T) {
-	srv := spawnServer(t, "/compile", []string{"Compiling...\n", "Done\n"}, 0)
-	res, err := newClient(t, srv.URL).Compile(context.Background(), "pump.yaml")
+	job, err := newClient(t, srv.URL).Compile(context.Background(), "pump.yaml")
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	if res.ExitCode == nil || *res.ExitCode != 0 {
-		t.Errorf("exit code = %v, want 0", res.ExitCode)
+	if job.JobID != "job-1" || job.Status != "queued" {
+		t.Errorf("unexpected job: %+v", job)
 	}
-	if !strings.Contains(res.Output, "Done") {
-		t.Errorf("output = %q", res.Output)
-	}
-}
-
-func TestUploadSpawnFailure(t *testing.T) {
-	srv := spawnServer(t, "/upload", []string{"ERROR: offline\n"}, 1)
-	res, err := newClient(t, srv.URL).Upload(context.Background(), "pump.yaml", "OTA")
-	if err != nil {
-		t.Fatalf("Upload: %v", err)
-	}
-	if res.ExitCode == nil || *res.ExitCode != 1 {
-		t.Errorf("exit code = %v, want 1", res.ExitCode)
+	if job.Terminal() {
+		t.Error("queued job should not be terminal")
 	}
 }
 
-// Ensure the spawn upload sends the port in its spawn payload.
-func TestUploadSendsPort(t *testing.T) {
-	up := websocket.Upgrader{}
-	mux := http.NewServeMux()
+func TestUploadEnqueueSendsPort(t *testing.T) {
 	var gotPort any
-	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := up.Upgrade(w, r, nil)
-		if err != nil {
-			return
+	srv := wsDashboard(t, false, func(sc *srvConn, c command) {
+		if c.Command != "firmware/upload" {
+			t.Errorf("command = %s", c.Command)
 		}
-		defer func() { _ = conn.Close() }()
-		var spawn map[string]any
-		_ = conn.ReadJSON(&spawn)
-		gotPort = spawn["port"]
-		_ = conn.WriteJSON(map[string]any{"event": "exit", "code": 0})
+		gotPort = c.Args["port"]
+		sc.result(c.MessageID, map[string]any{
+			"job_id": "job-2", "job_type": "upload", "status": "queued",
+		})
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	if _, err := newClient(t, srv.URL).Upload(context.Background(), "pump.yaml", "/dev/ttyUSB0"); err != nil {
+	job, err := newClient(t, srv.URL).Upload(context.Background(), "pump.yaml", "/dev/ttyUSB0")
+	if err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
 	if gotPort != "/dev/ttyUSB0" {
 		t.Errorf("port = %v", gotPort)
+	}
+	if job.JobID != "job-2" {
+		t.Errorf("job_id = %q", job.JobID)
+	}
+}
+
+func TestUploadDefaultsOTA(t *testing.T) {
+	var gotPort any
+	srv := wsDashboard(t, false, func(sc *srvConn, c command) {
+		gotPort = c.Args["port"]
+		sc.result(c.MessageID, map[string]any{"job_id": "j", "status": "queued"})
+	})
+	if _, err := newClient(t, srv.URL).Upload(context.Background(), "pump.yaml", ""); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if gotPort != "OTA" {
+		t.Errorf("default port = %v, want OTA", gotPort)
+	}
+}
+
+func TestGetJobTerminal(t *testing.T) {
+	srv := wsDashboard(t, false, func(sc *srvConn, c command) {
+		if c.Command != "firmware/get_job" || c.Args["job_id"] != "job-1" {
+			t.Errorf("unexpected: %s %v", c.Command, c.Args)
+		}
+		sc.result(c.MessageID, map[string]any{
+			"job_id": "job-1", "job_type": "compile", "status": "completed",
+			"exit_code": 0, "output": []string{"Compiling...\n", "Done\n"},
+		})
+	})
+	job, err := newClient(t, srv.URL).GetJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if !job.Terminal() || !job.Succeeded() {
+		t.Errorf("expected terminal+success, got %+v", job)
+	}
+	if len(job.Output) != 2 {
+		t.Errorf("output lines = %d", len(job.Output))
+	}
+}
+
+func TestGetJobFailed(t *testing.T) {
+	srv := wsDashboard(t, false, func(sc *srvConn, c command) {
+		sc.result(c.MessageID, map[string]any{
+			"job_id": "job-3", "job_type": "compile", "status": "failed",
+			"exit_code": 1, "error": "build error",
+		})
+	})
+	job, err := newClient(t, srv.URL).GetJob(context.Background(), "job-3")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if !job.Terminal() {
+		t.Error("failed job should be terminal")
+	}
+	if job.Succeeded() {
+		t.Error("failed job should not be a success")
+	}
+	if job.Error != "build error" {
+		t.Errorf("error = %q", job.Error)
 	}
 }
