@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -46,6 +47,7 @@ func (t *Tools) Register(server *mcp.Server) {
 	t.registerValidate(server)
 	t.registerCompile(server)
 	t.registerUpload(server)
+	t.registerGetJob(server)
 	t.registerDownload(server)
 	t.registerLogs(server)
 }
@@ -171,17 +173,17 @@ func (t *Tools) registerValidate(server *mcp.Server) {
 func (t *Tools) registerCompile(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "compile_esphome",
-		Description: "Compile (build) the firmware for an ESPHome device configuration without flashing. Returns build output and exit status. May take several minutes on the first build.",
+		Description: "Start a firmware build for an ESPHome device (no flashing). Builds can run for minutes — longer than a tool call may stay open — so this is asynchronous: it queues the build and returns a job_id immediately. Poll get_esphome_job with that job_id until status is terminal (completed/failed/cancelled).",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args configArgs) (*mcp.CallToolResult, any, error) {
 		if err := validate.Identifier("config", args.Config); err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		res, err := t.client.Compile(ctx, args.Config)
+		job, err := t.client.Compile(ctx, args.Config)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		return commandResult(res), nil, nil
+		return jobResult(job, "Build queued. Poll get_esphome_job with this job_id until done is true."), nil, nil
 	})
 }
 
@@ -195,18 +197,70 @@ type uploadArgs struct {
 func (t *Tools) registerUpload(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "upload_esphome",
-		Description: "Compile and flash an ESPHome device. Defaults to an over-the-air (OTA) upload, which requires the device to already be running ESPHome and reachable on the network. The very first flash of a new board must be done over USB (see download_esphome_binary / web.esphome.io) and cannot go through this tool.",
+		Description: "Flash a device's already-compiled binary over the air (queue the upload). Asynchronous: returns a job_id immediately; poll get_esphome_job until done. Compile first (compile_esphome) — this flashes the latest build. OTA requires the device to already be running ESPHome on the network; a first flash of a blank board needs USB (download_esphome_binary / web.esphome.io).",
 		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args uploadArgs) (*mcp.CallToolResult, any, error) {
 		if err := validate.Identifier("config", args.Config); err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		res, err := t.client.Upload(ctx, args.Config, args.Port)
+		job, err := t.client.Upload(ctx, args.Config, args.Port)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		return commandResult(res), nil, nil
+		return jobResult(job, "Flash queued. Poll get_esphome_job with this job_id until done is true."), nil, nil
 	})
+}
+
+// --- get_esphome_job ---
+
+type jobArgs struct {
+	JobID string `json:"job_id" jsonschema:"The job_id returned by compile_esphome or upload_esphome"`
+}
+
+func (t *Tools) registerGetJob(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_esphome_job",
+		Description: "Check the status of a compile or upload job started by compile_esphome / upload_esphome. Poll this until done is true; success reports whether it finished cleanly, and output carries the build/flash log (full on failure).",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args jobArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("job_id", args.JobID); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		job, err := t.client.GetJob(ctx, args.JobID)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		return jobResult(job, ""), nil, nil
+	})
+}
+
+// jobResult renders a firmware job as a JSON result. The build/flash log is
+// included only once the job is terminal (and tail-trimmed for display).
+func jobResult(job *Job, note string) *mcp.CallToolResult {
+	out := map[string]any{
+		"job_id":   job.JobID,
+		"job_type": job.JobType,
+		"status":   job.Status,
+		"done":     job.Terminal(),
+		"success":  job.Succeeded(),
+	}
+	if note != "" {
+		out["note"] = note
+	}
+	if job.Progress != nil {
+		out["progress"] = *job.Progress
+	}
+	if job.ExitCode != nil {
+		out["exit_code"] = *job.ExitCode
+	}
+	if job.Error != "" {
+		out["error"] = job.Error
+	}
+	if job.Terminal() && len(job.Output) > 0 {
+		out["output"] = tail(strings.Join(job.Output, ""), displayTail)
+	}
+	result, _, _ := mcputil.JSONResult(out)
+	return result
 }
 
 // --- get_esphome_logs ---

@@ -26,7 +26,7 @@ All tool groups are optional. The server registers only what's configured and st
 
 **Frigate NVR** — list cameras, get live snapshots, query detection events, get event snapshots
 
-**ESPHome** — list dashboard devices and secret key names; read/write device YAML, includes, and secrets; validate, compile, and OTA-upload firmware; capture live device logs
+**ESPHome** — list dashboard devices and secret key names; read/write device YAML; validate; compile and OTA-upload firmware via the dashboard's async job queue (poll for completion); capture live device logs
 
 The full tool catalog with per-tool descriptions is in [CLAUDE.md](CLAUDE.md#mcp-tools-provided).
 

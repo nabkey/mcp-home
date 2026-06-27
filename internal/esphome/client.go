@@ -505,9 +505,7 @@ func (c *Client) httpDownload(ctx context.Context, token string) ([]byte, error)
 	return data, nil
 }
 
-// --- Legacy spawn-protocol commands (compile, upload) ---
-
-// CommandResult captures the outcome of a streamed command.
+// CommandResult captures the outcome of a streamed command (validate, logs).
 type CommandResult struct {
 	// Output is the captured stdout (possibly tail-truncated).
 	Output string
@@ -519,89 +517,92 @@ type CommandResult struct {
 	TimedOut bool
 }
 
-// Compile builds the firmware for a device without flashing.
-func (c *Client) Compile(ctx context.Context, configuration string) (*CommandResult, error) {
-	return c.spawn(ctx, "/compile", configuration, nil)
+// --- Async firmware jobs (compile, upload) ---
+//
+// Compile and upload can each run for minutes — far longer than an MCP request
+// may stay open. They use the dashboard's job queue: enqueue returns a job
+// immediately, and the caller polls GetJob until the job reaches a terminal
+// state. (The MCP Tasks extension would model this at the protocol layer, but
+// neither the go-sdk in use nor the client supports it yet; this is the same
+// poll pattern at the application layer.)
+
+// Job is the subset of the dashboard's FirmwareJob we surface.
+type Job struct {
+	JobID         string   `json:"job_id"`
+	Configuration string   `json:"configuration"`
+	JobType       string   `json:"job_type"`
+	Status        string   `json:"status"`
+	ExitCode      *int     `json:"exit_code"`
+	Output        []string `json:"output"`
+	Error         string   `json:"error"`
+	Progress      *int     `json:"progress"`
+	DependsOn     string   `json:"depends_on"`
 }
 
-// Upload compiles and flashes a device. port is the upload target: "OTA"
-// (default) for an over-the-air flash, or a serial path on the dashboard host.
-func (c *Client) Upload(ctx context.Context, configuration, port string) (*CommandResult, error) {
+// Terminal reports whether the job has finished (success, failure, or cancel).
+func (j *Job) Terminal() bool {
+	switch j.Status {
+	case "completed", "failed", "cancelled":
+		return true
+	}
+	return false
+}
+
+// Succeeded reports whether the job finished cleanly.
+func (j *Job) Succeeded() bool {
+	return j.Status == "completed" && (j.ExitCode == nil || *j.ExitCode == 0)
+}
+
+// Compile queues a build for a device and returns the queued job immediately.
+// Poll GetJob with the returned JobID until it is Terminal.
+func (c *Client) Compile(ctx context.Context, configuration string) (*Job, error) {
+	return c.enqueue(ctx, "firmware/compile", map[string]any{"configuration": configuration})
+}
+
+// Upload queues a flash of a device's already-compiled binary and returns the
+// queued job immediately. port is the target: "OTA" (default) or a serial path.
+// Poll GetJob with the returned JobID until it is Terminal.
+func (c *Client) Upload(ctx context.Context, configuration, port string) (*Job, error) {
 	if port == "" {
 		port = "OTA"
 	}
-	return c.spawn(ctx, "/upload", configuration, map[string]any{"port": port})
+	return c.enqueue(ctx, "firmware/upload", map[string]any{
+		"configuration": configuration,
+		"port":          port,
+	})
 }
 
-// spawnEvent is one message from a legacy spawn-protocol WebSocket: per-line
-// {"event":"line","data":"..."} then {"event":"exit","code":N}.
-type spawnEvent struct {
-	Event string `json:"event"`
-	Data  string `json:"data"`
-	Code  int    `json:"code"`
-}
-
-func (c *Client) spawn(ctx context.Context, path, configuration string, extra map[string]any) (*CommandResult, error) {
-	wsURL, err := c.wsURL(path)
+func (c *Client) enqueue(ctx context.Context, cmd string, args map[string]any) (*Job, error) {
+	s, err := c.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
-	header := http.Header{}
-	if c.password != "" {
-		// Legacy REST/WS endpoints accept HTTP Basic auth.
-		req, _ := http.NewRequest(http.MethodGet, c.baseURL, nil)
-		req.SetBasicAuth("admin", c.password)
-		header.Set("Authorization", req.Header.Get("Authorization"))
-	}
-
-	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
+	defer s.close()
+	raw, err := s.command(cmd, args)
 	if err != nil {
-		if resp != nil {
-			return nil, fmt.Errorf("dialing %s (status %d): %w", path, resp.StatusCode, err)
-		}
-		return nil, fmt.Errorf("dialing %s: %w", path, err)
+		return nil, err
 	}
-	defer func() { _ = conn.Close() }()
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })
-	defer stop()
+	return parseJob(raw, cmd)
+}
 
-	spawn := map[string]any{"type": "spawn", "configuration": configuration}
-	for k, v := range extra {
-		spawn[k] = v
+// GetJob returns the current state of a firmware job by ID.
+func (c *Client) GetJob(ctx context.Context, jobID string) (*Job, error) {
+	s, err := c.dial(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if err := conn.WriteJSON(spawn); err != nil {
-		return nil, fmt.Errorf("sending spawn command: %w", err)
+	defer s.close()
+	raw, err := s.command("firmware/get_job", map[string]any{"job_id": jobID})
+	if err != nil {
+		return nil, err
 	}
+	return parseJob(raw, "firmware/get_job")
+}
 
-	var b strings.Builder
-	result := &CommandResult{}
-	for {
-		if ctx.Err() != nil {
-			result.TimedOut = true
-			break
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(wsIdleTimeout))
-		var ev spawnEvent
-		if err := conn.ReadJSON(&ev); err != nil {
-			if ctx.Err() != nil {
-				result.TimedOut = true
-			}
-			break
-		}
-		switch ev.Event {
-		case "line":
-			if b.Len() < maxCommandOutput {
-				b.WriteString(ev.Data)
-			} else {
-				result.Truncated = true
-			}
-		case "exit":
-			code := ev.Code
-			result.ExitCode = &code
-			result.Output = b.String()
-			return result, nil
-		}
+func parseJob(raw json.RawMessage, cmd string) (*Job, error) {
+	var job Job
+	if err := json.Unmarshal(raw, &job); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", cmd, err)
 	}
-	result.Output = b.String()
-	return result, nil
+	return &job, nil
 }
