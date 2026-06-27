@@ -454,3 +454,22 @@ func TestGetJobFailed(t *testing.T) {
 		t.Errorf("error = %q", job.Error)
 	}
 }
+
+func TestJobLog(t *testing.T) {
+	srv := wsDashboard(t, false, func(sc *srvConn, c command) {
+		if c.Command != "firmware/follow_job" || c.Args["job_id"] != "job-9" {
+			t.Errorf("unexpected: %s %v", c.Command, c.Args)
+		}
+		// follow_job replays the sidecar log as output events, then a result.
+		sc.output(c.MessageID, "Compiling .pioenvs/pool-pump/src/main.cpp\n")
+		sc.output(c.MessageID, "error: 'send' was not declared in this scope\n")
+		sc.streamResult(c.MessageID, false, 1)
+	})
+	log, err := newClient(t, srv.URL).JobLog(context.Background(), "job-9")
+	if err != nil {
+		t.Fatalf("JobLog: %v", err)
+	}
+	if !strings.Contains(log, "was not declared") {
+		t.Errorf("log missing error line: %q", log)
+	}
+}
