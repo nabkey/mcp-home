@@ -585,7 +585,9 @@ func (c *Client) enqueue(ctx context.Context, cmd string, args map[string]any) (
 	return parseJob(raw, cmd)
 }
 
-// GetJob returns the current state of a firmware job by ID.
+// GetJob returns the current state of a firmware job by ID. Note: for terminal
+// jobs the dashboard returns an empty Output here — the full build/flash log
+// lives in a sidecar and is retrieved via JobLog (firmware/follow_job).
 func (c *Client) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	s, err := c.dial(ctx)
 	if err != nil {
@@ -597,6 +599,25 @@ func (c *Client) GetJob(ctx context.Context, jobID string) (*Job, error) {
 		return nil, err
 	}
 	return parseJob(raw, "firmware/get_job")
+}
+
+// JobLog fetches a job's full output log. The dashboard omits output from
+// get_job for terminal jobs (it's flushed to a per-job sidecar), so the log is
+// retrieved by following the job: firmware/follow_job replays the sidecar as
+// `output` events then a terminal `result` event. Call only for a job that has
+// reached a terminal state — for a still-running job the stream tails live and
+// won't return until the job finishes (bound ctx accordingly).
+func (c *Client) JobLog(ctx context.Context, jobID string) (string, error) {
+	s, err := c.dial(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer s.close()
+	res, err := s.stream("firmware/follow_job", map[string]any{"job_id": jobID})
+	if err != nil {
+		return "", err
+	}
+	return res.Output, nil
 }
 
 func parseJob(raw json.RawMessage, cmd string) (*Job, error) {

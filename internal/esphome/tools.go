@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,6 +20,8 @@ const (
 	maxLogSeconds = 120
 	// displayTail is how much trailing command output to surface inline.
 	displayTail = 8000
+	// jobLogTimeout bounds the follow_job log fetch for a terminal job.
+	jobLogTimeout = 90 * time.Second
 )
 
 // Tools holds ESPHome dashboard tools.
@@ -183,7 +184,7 @@ func (t *Tools) registerCompile(server *mcp.Server) {
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		return jobResult(job, "Build queued. Poll get_esphome_job with this job_id until done is true."), nil, nil
+		return jobResult(job, "Build queued. Poll get_esphome_job with this job_id until done is true.", ""), nil, nil
 	})
 }
 
@@ -207,7 +208,7 @@ func (t *Tools) registerUpload(server *mcp.Server) {
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		return jobResult(job, "Flash queued. Poll get_esphome_job with this job_id until done is true."), nil, nil
+		return jobResult(job, "Flash queued. Poll get_esphome_job with this job_id until done is true.", ""), nil, nil
 	})
 }
 
@@ -230,13 +231,23 @@ func (t *Tools) registerGetJob(server *mcp.Server) {
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		return jobResult(job, ""), nil, nil
+		// get_job omits output for terminal jobs; fetch the log via follow_job
+		// once the job is done so the caller sees build/flash errors.
+		log := ""
+		if job.Terminal() {
+			logCtx, cancel := context.WithTimeout(ctx, jobLogTimeout)
+			defer cancel()
+			if l, lerr := t.client.JobLog(logCtx, args.JobID); lerr == nil {
+				log = l
+			}
+		}
+		return jobResult(job, "", log), nil, nil
 	})
 }
 
-// jobResult renders a firmware job as a JSON result. The build/flash log is
-// included only once the job is terminal (and tail-trimmed for display).
-func jobResult(job *Job, note string) *mcp.CallToolResult {
+// jobResult renders a firmware job as a JSON result. log, when non-empty, is
+// the build/flash output fetched separately (tail-trimmed for display).
+func jobResult(job *Job, note, log string) *mcp.CallToolResult {
 	out := map[string]any{
 		"job_id":   job.JobID,
 		"job_type": job.JobType,
@@ -256,8 +267,8 @@ func jobResult(job *Job, note string) *mcp.CallToolResult {
 	if job.Error != "" {
 		out["error"] = job.Error
 	}
-	if job.Terminal() && len(job.Output) > 0 {
-		out["output"] = tail(strings.Join(job.Output, ""), displayTail)
+	if log != "" {
+		out["output"] = tail(log, displayTail)
 	}
 	result, _, _ := mcputil.JSONResult(out)
 	return result
