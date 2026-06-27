@@ -92,19 +92,19 @@ func (t *Tools) registerListSecrets(server *mcp.Server) {
 // --- read_esphome_file ---
 
 type readFileArgs struct {
-	File string `json:"file" jsonschema:"Name of a file in the ESPHome config directory (e.g. pump.yaml, pentair.h, secrets.yaml)"`
+	File string `json:"file" jsonschema:"The device configuration filename to read (e.g. pump.yaml)"`
 }
 
 func (t *Tools) registerReadFile(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "read_esphome_file",
-		Description: "Read a file from the ESPHome dashboard config directory (a device YAML, an included header, or secrets.yaml).",
+		Description: "Read a device's YAML configuration from the ESPHome dashboard.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args readFileArgs) (*mcp.CallToolResult, any, error) {
 		if err := validate.Identifier("file", args.File); err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		content, err := t.client.ReadFile(ctx, args.File)
+		content, err := t.client.ReadConfig(ctx, args.File)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
@@ -115,14 +115,14 @@ func (t *Tools) registerReadFile(server *mcp.Server) {
 // --- write_esphome_file ---
 
 type writeFileArgs struct {
-	File    string `json:"file" jsonschema:"Name of the file to write in the ESPHome config directory (e.g. pump.yaml, pentair.h). Writing secrets.yaml overwrites the SHARED secrets file — append manually instead of replacing it."`
-	Content string `json:"content" jsonschema:"Full contents to write. This overwrites the file."`
+	File    string `json:"file" jsonschema:"The device configuration filename to write (e.g. pump.yaml). Created if it doesn't exist, overwritten if it does. The YAML must be self-contained — the dashboard writes a single device config, not separate include files."`
+	Content string `json:"content" jsonschema:"Full device YAML to write. This overwrites the config."`
 }
 
 func (t *Tools) registerWriteFile(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "write_esphome_file",
-		Description: "Create or overwrite a file in the ESPHome dashboard config directory. Use to push a device YAML and its included headers. Caution: writing secrets.yaml replaces the dashboard's shared secrets for ALL devices.",
+		Description: "Create or overwrite a device's YAML configuration in the ESPHome dashboard. The config must be a single self-contained YAML (the dashboard has no separate-include-file write; bundle anything needed inline).",
 		Annotations: mcputil.Additive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args writeFileArgs) (*mcp.CallToolResult, any, error) {
 		if err := validate.Identifier("file", args.File); err != nil {
@@ -131,10 +131,15 @@ func (t *Tools) registerWriteFile(server *mcp.Server) {
 		if args.Content == "" {
 			return mcputil.Errorf("content is required"), nil, nil
 		}
-		if err := t.client.WriteFile(ctx, args.File, args.Content); err != nil {
+		created, err := t.client.WriteConfig(ctx, args.File, args.Content)
+		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		return mcputil.TextResult(fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), args.File)), nil, nil
+		verb := "Updated"
+		if created {
+			verb = "Created"
+		}
+		return mcputil.TextResult(fmt.Sprintf("%s %s (%d bytes)", verb, args.File, len(args.Content))), nil, nil
 	})
 }
 
@@ -280,11 +285,7 @@ func (t *Tools) registerDownload(server *mcp.Server) {
 		if err := validate.Identifier("config", args.Config); err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		fileType := ""
-		if args.Factory {
-			fileType = "firmware-factory.bin"
-		}
-		data, err := t.client.DownloadBinary(ctx, args.Config, fileType)
+		data, file, err := t.client.DownloadBinary(ctx, args.Config, args.Factory)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
@@ -292,6 +293,7 @@ func (t *Tools) registerDownload(server *mcp.Server) {
 		return mcputil.JSONResult(map[string]any{
 			"config":     args.Config,
 			"factory":    args.Factory,
+			"file":       file,
 			"size_bytes": len(data),
 			"sha256":     hex.EncodeToString(sum[:]),
 			"note":       "Binary verified downloadable from the dashboard. For a first USB flash, use the dashboard download or https://web.esphome.io; OTA updates can use upload_esphome.",

@@ -110,7 +110,7 @@ Each integration has its own client that handles HTTP/WebSocket communication:
 - **Sonarr** (`SONARR_URL`, `SONARR_API_KEY`) — `/api/v3/` endpoints, `X-Api-Key` header auth.
 - **Radarr** (`RADARR_URL`, `RADARR_API_KEY`) — Same *arr API pattern as Sonarr.
 - **Frigate** (`FRIGATE_URL`) — No auth, REST API for config, events, and JPEG snapshots.
-- **ESPHome** (`ESPHOME_URL`, optional `ESPHOME_PASSWORD`) — ESPHome dashboard. REST for the device list, secret key names, file read/write (`/edit`), and firmware download (`/download.bin`); WebSocket command channels (`/validate`, `/compile`, `/upload`, `/logs`) that stream the `esphome` CLI as `line`/`exit` events. Optional cookie login (`/login`) cached via `sync.Once` and reused for both HTTP and WS.
+- **ESPHome** (`ESPHOME_URL`, optional `ESPHOME_PASSWORD`) — ESPHome Device Builder dashboard. Most operations go over the single multiplexed `/ws` command socket (`{command, message_id, args}` → `ResultMessage` / streaming `EventMessage{event:"output"|"result"}` / `ErrorMessage`): `devices/list`, `config/get_secrets`, `devices/get_config`, `devices/update_config` (falls back to `devices/create` on `not_found`), `devices/validate`, `devices/logs`, `firmware/get_binaries` + `firmware/download_token` (binary then fetched over HTTP `/api/firmware/download?token=`). Compile and upload use the still-supported legacy spawn-protocol WebSockets (`/compile`, `/upload`) that stream `line`/`exit` events. Auth: a dashboard reporting `requires_auth` gets an `auth/login` handshake on `/ws` (or HTTP Basic on the legacy spawn sockets); an add-on on its exposed port reports `requires_auth: false`.
 
 All tool sets are optional — the server registers only what's configured and starts even with zero tools.
 
