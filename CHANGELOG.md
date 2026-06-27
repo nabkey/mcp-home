@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/nabkey/mcp-home/compare/v1.7.0...v1.8.0) (2026-06-27)
+
+
+### Features
+
+* **esphome:** surface build/flash logs in get_esphome_job via follow_job ([#31](https://github.com/nabkey/mcp-home/issues/31)) ([292e667](https://github.com/nabkey/mcp-home/commit/292e6670e0808016e0ac74a3461e699cde1a49e9))
+
 ## [1.7.0](https://github.com/nabkey/mcp-home/compare/v1.6.1...v1.7.0) (2026-06-27)
 
 
