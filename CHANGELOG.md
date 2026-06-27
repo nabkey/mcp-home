@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.1](https://github.com/nabkey/mcp-home/compare/v1.6.0...v1.6.1) (2026-06-27)
+
+
+### Bug Fixes
+
+* **esphome:** rewrite client for the new Device Builder /ws API ([#27](https://github.com/nabkey/mcp-home/issues/27)) ([43b7469](https://github.com/nabkey/mcp-home/commit/43b746948d5a9e4383fa95a71d5b83c2887d76f9))
+
 ## [1.6.0](https://github.com/nabkey/mcp-home/compare/v1.5.0...v1.6.0) (2026-06-26)
 
 
