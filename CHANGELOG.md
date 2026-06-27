@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/nabkey/mcp-home/compare/v1.6.1...v1.7.0) (2026-06-27)
+
+
+### Features
+
+* **esphome:** async job-based compile/upload to survive long builds ([#29](https://github.com/nabkey/mcp-home/issues/29)) ([b411948](https://github.com/nabkey/mcp-home/commit/b411948638af65e61a87bc6e0220e1b982ddf521))
+
 ## [1.6.1](https://github.com/nabkey/mcp-home/compare/v1.6.0...v1.6.1) (2026-06-27)
 
 
