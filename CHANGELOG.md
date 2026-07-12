@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/nabkey/mcp-home/compare/v1.8.0...v1.8.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* bump Go to 1.26.5 to resolve GO-2026-5856 vulncheck failure ([#35](https://github.com/nabkey/mcp-home/issues/35)) ([6d2834d](https://github.com/nabkey/mcp-home/commit/6d2834ddd293ed4a48ef50bbf0968997e0e8015a))
+
 ## [1.8.0](https://github.com/nabkey/mcp-home/compare/v1.7.0...v1.8.0) (2026-06-27)
 
 
