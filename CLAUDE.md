@@ -31,7 +31,7 @@ golangci-lint run ./...
 mise run check
 ```
 
-Go 1.26.4 and golangci-lint are managed via mise (see `mise.toml`, which also defines `build`/`test`/`vet`/`lint`/`fmt`/`check` tasks). CI (`.github/workflows/ci.yml`) runs gofmt/vet/build/test (with `-race`) and golangci-lint on every PR; the publish workflow is gated on tests.
+Go 1.26.5 and golangci-lint are managed via mise (see `mise.toml`, which also defines `build`/`test`/`vet`/`lint`/`fmt`/`check` tasks). CI (`.github/workflows/ci.yml`) runs gofmt/vet/build/test (with `-race`) and golangci-lint on every PR; the publish workflow is gated on tests.
 
 ### Releases & container
 
