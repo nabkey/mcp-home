@@ -1,6 +1,6 @@
 module github.com/nabkey/mcp-home
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/alecthomas/kong v1.15.0
