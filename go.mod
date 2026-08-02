@@ -6,7 +6,7 @@ require (
 	github.com/alecthomas/kong v1.16.0
 	github.com/cloudflare/cloudflare-go/v4 v4.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/modelcontextprotocol/go-sdk v1.7.0
 )
 
 require (
@@ -19,5 +19,7 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
