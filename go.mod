@@ -3,7 +3,7 @@ module github.com/nabkey/mcp-home
 go 1.26.5
 
 require (
-	github.com/alecthomas/kong v1.16.0
+	github.com/alecthomas/kong v1.16.1
 	github.com/cloudflare/cloudflare-go/v4 v4.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
