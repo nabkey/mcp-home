@@ -26,6 +26,8 @@ func New(cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
 
 	// Audit every tool call with the authenticated user.
 	server.AddReceivingMiddleware(auditMiddleware(logger))
+	// Tell clients how long a tools/list response stays fresh.
+	server.AddReceivingMiddleware(cacheHintMiddleware())
 
 	if cfg.Hass.Enabled() {
 		hassTools, err := hass.NewTools(cfg.Hass.URL, cfg.Hass.Token, cfg.Hass.DenyServices)
