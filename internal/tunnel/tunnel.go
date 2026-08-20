@@ -10,10 +10,10 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/cloudflare/cloudflare-go/v4"
-	"github.com/cloudflare/cloudflare-go/v4/dns"
-	"github.com/cloudflare/cloudflare-go/v4/option"
-	"github.com/cloudflare/cloudflare-go/v4/zero_trust"
+	"github.com/cloudflare/cloudflare-go/v5"
+	"github.com/cloudflare/cloudflare-go/v5/dns"
+	"github.com/cloudflare/cloudflare-go/v5/option"
+	"github.com/cloudflare/cloudflare-go/v5/zero_trust"
 )
 
 // Config holds the configuration needed to create and run a Cloudflare Tunnel.
