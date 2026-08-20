@@ -31,7 +31,7 @@ golangci-lint run ./...
 mise run check
 ```
 
-Go 1.26.5 and golangci-lint are managed via mise (see `mise.toml`, which also defines `build`/`test`/`vet`/`lint`/`fmt`/`check` tasks). CI (`.github/workflows/ci.yml`) runs gofmt/vet/build/test (with `-race`) and golangci-lint on every PR; the publish workflow is gated on tests.
+Go 1.26.7 and golangci-lint are managed via mise (see `mise.toml`, which also defines `build`/`test`/`vet`/`lint`/`fmt`/`check` tasks). CI (`.github/workflows/ci.yml`) runs gofmt/vet/build/test (with `-race`) and golangci-lint on every PR; the publish workflow is gated on tests.
 
 ### Releases & container
 
@@ -51,7 +51,7 @@ All config is via environment variables (or CLI flags). Uses [Kong](https://gith
 - `FRIGATE_URL` — Frigate NVR
 - `ESPHOME_URL` — ESPHome dashboard (the HA ESPHome add-on); optional `ESPHOME_PASSWORD` if the dashboard has auth enabled
 
-`LOG_LEVEL` (debug/info/warn/error) controls slog verbosity. Every tool call is audit-logged with the CF Access user via an MCP receiving middleware (`internal/server/audit.go`). All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
+`LOG_LEVEL` (debug/info/warn/error) controls slog verbosity. Every tool call is audit-logged with the CF Access user, the calling client, and the negotiated protocol version via an MCP receiving middleware (`internal/server/audit.go`); client identity is read from the per-request `_meta` so it works without an initialize handshake. A second receiving middleware (`internal/server/cache.go`) stamps a `ttlMs` freshness hint (SEP-2549) on `tools/list`, since the tool set is fixed once the process starts. All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
 
 Config struct definitions are in `internal/config/config.go`. Each optional group has `Enabled() bool` and `Validate() error` methods. Validation runs via Kong's `AfterApply` hook.
 
@@ -83,7 +83,7 @@ Clients connect directly to `https://CF_HOSTNAME/mcp`. Cloudflare Access acts as
 
 - `cmd/mcp-server/` — Entrypoint. Parses config via Kong, starts HTTP, sets up tunnel, runs cloudflared.
 - `internal/config/` — Kong CLI struct with `envprefix` tags, `Enabled()`/`Validate()` methods, and `AfterApply` hook.
-- `internal/server/` — Server factory. Creates `mcp.Server` and conditionally registers tool sets based on `config.CLI`.
+- `internal/server/` — Server factory. Creates `mcp.Server` and conditionally registers tool sets based on `config.CLI`. Holds the audit and `tools/list` cache-hint receiving middlewares.
 - `internal/tunnel/` — Cloudflare Tunnel lifecycle: create/reuse tunnel via API, configure ingress rules, ensure DNS CNAME, get token, exec cloudflared. Auto-downloads cloudflared if not on PATH.
 - `internal/cfaccess/` — Cloudflare Access JWT validation and auto-discovery. `Discover()` finds the team domain and application AUD from the API. `TokenVerifier()` adapts JWT validation to the go-sdk's `auth.RequireBearerToken` interface.
 - `internal/middleware/` — HTTP request logging middleware.
@@ -101,6 +101,8 @@ Tools use the go-sdk generic `mcp.AddTool[In, Out]` pattern:
 - Define an args struct with `json` and `jsonschema:"..."` tags (tag value is the description directly, no `description=` prefix)
 - Handler signature: `func(ctx context.Context, req *mcp.CallToolRequest, args T) (*mcp.CallToolResult, any, error)`
 - Return content via `*mcp.CallToolResult` with `TextContent`; the second return value (`any`) is unused
+
+To ask the user something mid-call, return a `*mcp.CallToolResult` carrying `InputRequests` (and an opaque `RequestState`) instead of content — SEP-2322 multi-round-trip. The SDK puts the question to the client and re-invokes the same handler with the answer in `req.Params.InputResponses`, so a handler must branch on whether that map is populated. A result may carry content *or* input requests, never both. Gate this on `req.ClientCapabilities()`: a client that does not advertise elicitation cannot be asked and must get the un-prompted behaviour. `internal/esphome/confirm.go` is the worked example (flash confirmation for `upload_esphome`).
 
 ### Service Clients
 
@@ -188,7 +190,7 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `write_esphome_file` | Create/overwrite a config-dir file (push YAML + includes) |
 | `validate_esphome` | Validate a config without building (streaming) |
 | `compile_esphome` | Queue a firmware build; returns a `job_id` immediately (async) |
-| `upload_esphome` | Queue an OTA flash of the latest build; returns a `job_id` (async, destructive) |
+| `upload_esphome` | Queue an OTA flash of the latest build; returns a `job_id` (async, destructive). Asks the user to confirm the device first when the client supports form elicitation |
 | `get_esphome_job` | Poll a compile/upload job's status, progress, and output |
 | `download_esphome_binary` | Confirm a built image exists; report size + SHA-256 |
 | `get_esphome_logs` | Capture live device logs for a bounded duration |

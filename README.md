@@ -73,7 +73,7 @@ Pass `--insecure` to disable authentication for local development. `LOG_LEVEL` (
 HASS_DENY_SERVICES=lock.unlock,alarm_control_panel.*
 ```
 
-Patterns are `domain.service` pairs; either part may be `*`. The deny list covers direct service calls and ad-hoc `execute_script` sequences (see [SECURITY.md](SECURITY.md) for limitations). Every tool call is also audit-logged with the authenticated user's email, tool name, arguments, and outcome.
+Patterns are `domain.service` pairs; either part may be `*`. The deny list covers direct service calls and ad-hoc `execute_script` sequences (see [SECURITY.md](SECURITY.md) for limitations). Every tool call is also audit-logged with the authenticated user's email, the calling client, tool name, arguments, and outcome. `upload_esphome` asks the user to confirm the device before flashing when the client supports elicitation.
 
 ### Docker
 

@@ -86,7 +86,11 @@ The cloudflared tunnel token is passed via `TUNNEL_TOKEN` environment variable, 
 
 ### 8. Audit Logging
 
-Every tool call is logged with the authenticated user (CF Access email from the JWT), tool name, truncated arguments, outcome, and duration — a per-user audit trail of everything the assistant did in the home.
+Every tool call is logged with the authenticated user (CF Access email from the JWT), the calling client and negotiated protocol version, tool name, truncated arguments, outcome, and duration — a per-user audit trail of everything the assistant did in the home. Client identity comes from the per-request `_meta` where the protocol supplies it, so it survives the stateless 2026-07-28 protocol, which has no initialize handshake to remember it from.
+
+### 9. Flash Confirmation
+
+`upload_esphome` overwrites a device's running firmware. When the connected client supports form elicitation, the tool asks the user to confirm the specific device before anything is queued, and reports a cancellation if they decline. Clients that cannot be asked flash as before — the tool is annotated destructive, and hosts prompt for tool approval in their own way — so this is a second guardrail, not the only one.
 
 ## Open Questions
 
