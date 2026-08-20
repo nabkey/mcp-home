@@ -204,6 +204,12 @@ func (t *Tools) registerUpload(server *mcp.Server) {
 		if err := validate.Identifier("config", args.Config); err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
+		switch decideFlash(req) {
+		case flashAsk:
+			return flashConfirmationRequest(args), nil, nil
+		case flashDeclined:
+			return flashDeclinedResult(args), nil, nil
+		}
 		job, err := t.client.Upload(ctx, args.Config, args.Port)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
