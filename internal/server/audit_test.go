@@ -83,3 +83,32 @@ func TestTruncate(t *testing.T) {
 		t.Errorf("truncate did not shorten: len=%d", len(got))
 	}
 }
+
+func TestAuditRecordsClientAndProtocol(t *testing.T) {
+	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{
+		Params: &mcp.CallToolParamsRaw{Name: "get_home_states"},
+	}
+	// Under the stateless 2026-07-28 protocol there is no initialize handshake,
+	// so the client identifies itself in each request's _meta.
+	req.Params.SetMeta(map[string]any{
+		mcp.MetaKeyProtocolVersion: "2026-07-28",
+		mcp.MetaKeyClientInfo:      map[string]any{"name": "claude-code", "version": "2.1.0"},
+	})
+
+	out := callThroughAudit(t, req, &mcp.CallToolResult{})
+	for _, want := range []string{"client=claude-code/2.1.0", "protocol=2026-07-28"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log %q missing %q", out, want)
+		}
+	}
+}
+
+func TestAuditUnknownClientWhenUnidentified(t *testing.T) {
+	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{
+		Params: &mcp.CallToolParamsRaw{Name: "get_home_states"},
+	}
+	out := callThroughAudit(t, req, &mcp.CallToolResult{})
+	if !strings.Contains(out, "client=unknown") {
+		t.Errorf("log %q missing client=unknown", out)
+	}
+}

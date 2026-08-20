@@ -13,9 +13,10 @@ import (
 const maxAuditArgsLen = 512
 
 // auditMiddleware logs every tool call with the authenticated user (the
-// Cloudflare Access email carried in the bearer token), the tool name, its
-// arguments, the outcome, and the duration. This is the audit trail for what
-// the assistant did in the home and on whose behalf.
+// Cloudflare Access email carried in the bearer token), the calling client and
+// protocol version, the tool name, its arguments, the outcome, and the
+// duration. This is the audit trail for what the assistant did in the home,
+// on whose behalf, and from which client.
 func auditMiddleware(logger *slog.Logger) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
@@ -29,9 +30,23 @@ func auditMiddleware(logger *slog.Logger) mcp.Middleware {
 			}
 
 			tool, args := "unknown", ""
-			if p, ok := req.GetParams().(*mcp.CallToolParamsRaw); ok {
-				tool = p.Name
-				args = truncate(string(p.Arguments), maxAuditArgsLen)
+			client, protocol := "unknown", ""
+			if r, ok := req.(*mcp.CallToolRequest); ok {
+				if r.Params != nil {
+					tool = r.Params.Name
+					args = truncate(string(r.Params.Arguments), maxAuditArgsLen)
+				}
+				// ClientInfo/ProtocolVersion read the per-request _meta first and
+				// fall back to the initialize handshake, so the caller is still
+				// identified under the stateless 2026-07-28 protocol, which has
+				// no handshake to remember it from.
+				if info := r.ClientInfo(); info != nil && info.Name != "" {
+					client = info.Name
+					if info.Version != "" {
+						client += "/" + info.Version
+					}
+				}
+				protocol = r.ProtocolVersion()
 			}
 
 			start := time.Now()
@@ -50,6 +65,8 @@ func auditMiddleware(logger *slog.Logger) mcp.Middleware {
 			logger.Info("tool call",
 				"tool", tool,
 				"user", user,
+				"client", client,
+				"protocol", protocol,
 				"args", args,
 				"outcome", outcome,
 				"duration", time.Since(start).Round(time.Millisecond),
