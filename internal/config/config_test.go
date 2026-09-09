@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -57,6 +58,35 @@ func TestEnabled(t *testing.T) {
 	}
 }
 
+// cliEnv is every variable the CLI struct reads. Kong resolves from the real
+// process environment, so a test that only sets what it cares about would
+// otherwise inherit the developer's own exports — and .env.example tells them
+// to export exactly these. Clearing the lot first makes each test's
+// environment the whole environment.
+var cliEnv = []string{
+	"CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_ZONE_ID", "CF_HOSTNAME", "CF_TUNNEL_NAME",
+	"INSECURE", "LOG_LEVEL",
+	"HASS_URL", "HASS_TOKEN", "HASS_DENY_SERVICES",
+	"SONARR_URL", "SONARR_API_KEY",
+	"RADARR_URL", "RADARR_API_KEY",
+	"FRIGATE_URL",
+	"ESPHOME_URL", "ESPHOME_PASSWORD",
+}
+
+// clearEnv unsets every CLI variable for the duration of the test. t.Setenv is
+// called first purely so the testing package records the original value and
+// restores it afterwards; the Unsetenv is what the parse actually sees, so
+// defaults still apply (an empty LOG_LEVEL would fail its enum tag).
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range cliEnv {
+		t.Setenv(k, "")
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatalf("unset %s: %v", k, err)
+		}
+	}
+}
+
 // parse runs Kong over the CLI struct with only the environment the test set,
 // mirroring how cmd/mcp-server builds it.
 func parse(t *testing.T) error {
@@ -78,6 +108,7 @@ func parse(t *testing.T) error {
 // fails only on whatever the test is actually exercising.
 func setCloudflare(t *testing.T) {
 	t.Helper()
+	clearEnv(t)
 	t.Setenv("CF_API_TOKEN", "token")
 	t.Setenv("CF_ACCOUNT_ID", "account")
 	t.Setenv("CF_ZONE_ID", "zone")

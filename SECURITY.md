@@ -11,7 +11,7 @@ Claude.ai / Claude Code CLI
       → cloudflared tunnel (subprocess on host)
         → http://127.0.0.1:<random>/mcp
           → [Cf-Access-Jwt-Assertion → Bearer bridge]
-            → [auth.RequireBearerToken] → StreamableHTTPHandler
+            → [auth.RequireBearerToken] → StreamableHTTPHandler (stateless)
 ```
 
 ## Authentication Flow
@@ -66,9 +66,11 @@ Validation checks:
 
 The HTTP server binds to `127.0.0.1:0` (random port). Not reachable from the network — only through the cloudflared subprocess or other local processes. Combined with Bearer token validation, local processes cannot execute tools without a valid CF Access-signed JWT.
 
-### 4. Session Hijacking Prevention
+### 4. No Sessions to Hijack
 
-The go-sdk's `StreamableHTTPHandler` binds `TokenInfo.UserID` (the authenticated email) to the MCP session. Subsequent requests must come from the same user, preventing session hijacking.
+The streamable transport runs stateless (`internal/server/http.go`), so there is no session to steal: no `Mcp-Session-Id` is issued, and nothing on the server outlives a single request.
+
+Each POST is authorized on its own. Every request carries the CF Access JWT, which `auth.RequireBearerToken` validates in full before the handler runs, so authorization cannot be inherited from an earlier request. This replaces the previous defense, in which the go-sdk bound `TokenInfo.UserID` to a long-lived MCP session and rejected later requests from a different user — that binding is unreachable in stateless mode, and the property it protected now holds because there is no shared state to carry a stale identity.
 
 ### 5. Input Validation
 
@@ -96,5 +98,5 @@ No server-side rate limiting. Cloudflare's edge provides some protection, but a 
 ### API token scope
 The `CF_API_TOKEN` has tunnel management + Access read permissions. Consider using separate tokens with narrower scopes.
 
-### Concurrent sessions
-The server does not limit the number of concurrent MCP sessions. A misbehaving client could create unlimited sessions.
+### Concurrent requests
+The server holds no sessions to limit, but it also does not cap concurrent in-flight requests. A misbehaving client could still issue many at once; each one occupies a goroutine and can reach the home network. `PropagateRequestCancellation` bounds the damage from clients that hang up mid-call, but only for those on protocol `2026-07-28` — an older client's abandoned request runs to completion.

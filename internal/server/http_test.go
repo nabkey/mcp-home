@@ -188,3 +188,69 @@ func TestCacheHintReachesTheWire(t *testing.T) {
 		t.Errorf("response missing private cache scope: %s", body)
 	}
 }
+
+// postToolCall sends a tools/call at 2026-07-28. SEP-2243 requires the tool
+// name in an Mcp-Name header alongside the Mcp-Method one.
+func postToolCall(t *testing.T, h http.Handler, mutate func(*http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "ping",
+			"arguments": map[string]any{},
+			"_meta": map[string]any{
+				mcp.MetaKeyProtocolVersion:    "2026-07-28",
+				mcp.MetaKeyClientInfo:         map[string]any{"name": "test", "version": "1"},
+				mcp.MetaKeyClientCapabilities: map[string]any{},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", "2026-07-28")
+	req.Header.Set("Mcp-Method", "tools/call")
+	req.Header.Set("Mcp-Name", "ping")
+	if mutate != nil {
+		mutate(req)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// Tool calls are essentially all this server does, so the happy path on the
+// new protocol is worth pinning down.
+func TestToolCallOnCurrentProtocol(t *testing.T) {
+	rec := postToolCall(t, testHandler(t), nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "pong") {
+		t.Errorf("tool did not run: %s", rec.Body.String())
+	}
+}
+
+// On 2026-07-28 the tool name must be mirrored into Mcp-Name, not just carried
+// in the body. Recorded because every tool call this server serves depends on
+// the client getting it right.
+func TestToolCallRequiresMcpNameHeader(t *testing.T) {
+	rec := postToolCall(t, testHandler(t), func(r *http.Request) {
+		r.Header.Del("Mcp-Name")
+	})
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("tools/call accepted without Mcp-Name: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "-32020") {
+		t.Errorf("want HeaderMismatch (-32020), got: %s", rec.Body.String())
+	}
+}

@@ -34,15 +34,38 @@ func cacheHintMiddleware() mcp.Middleware {
 			if err != nil || method != "tools/list" {
 				return result, err
 			}
-			if r, ok := result.(*mcp.ListToolsResult); ok {
-				// A paginated page is only meaningful next to its cursor, so
-				// hint only the complete list.
-				if r.NextCursor == "" {
-					r.TTLMs = int(toolListTTL / time.Millisecond)
-					r.CacheScope = "private"
-				}
+			r, ok := result.(*mcp.ListToolsResult)
+			if !ok {
+				return result, err
 			}
+			// Hint only a response that is the whole list. An empty NextCursor
+			// alone is not enough: the last page of a paginated walk has one
+			// too, and a client keying its cache by method rather than cursor
+			// would then hold a partial tool list. So require that the request
+			// asked for the first page as well.
+			//
+			// Inert while the server leaves ServerOptions.PageSize unset, since
+			// tools/list is then always a single page — but that is a default,
+			// not a guarantee.
+			if r.NextCursor != "" || requestCursor(req) != "" {
+				return result, err
+			}
+			r.TTLMs = int(toolListTTL / time.Millisecond)
+			r.CacheScope = "private"
 			return result, err
 		}
 	}
+}
+
+// requestCursor reports the pagination cursor a tools/list request carried, or
+// "" when it asked for the first page.
+func requestCursor(req mcp.Request) string {
+	if req == nil {
+		return ""
+	}
+	p, ok := req.GetParams().(*mcp.ListToolsParams)
+	if !ok {
+		return ""
+	}
+	return p.Cursor
 }
