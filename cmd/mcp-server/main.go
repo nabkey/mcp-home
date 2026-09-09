@@ -15,7 +15,6 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/modelcontextprotocol/go-sdk/auth"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"github.com/nabkey/mcp-home/internal/cfaccess"
 	"github.com/nabkey/mcp-home/internal/config"
@@ -61,16 +60,7 @@ func run(cli config.CLI, logger *slog.Logger) error {
 	logger.Info("starting MCP HTTP server", "addr", addr)
 
 	srv := server.New(ctx, cli, version, logger)
-	handler := mcp.NewStreamableHTTPHandler(
-		func(req *http.Request) *mcp.Server { return srv },
-		&mcp.StreamableHTTPOptions{
-			Logger: logger,
-			// Disable localhost DNS rebinding protection — requests arrive via
-			// cloudflared on 127.0.0.1 with an external Host header. Auth is
-			// handled by Cloudflare Access OAuth instead.
-			DisableLocalhostProtection: true,
-		},
-	)
+	handler := server.NewHTTPHandler(srv, logger)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

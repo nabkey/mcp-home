@@ -79,11 +79,21 @@ Claude.ai / Claude Code CLI
 
 Clients connect directly to `https://CF_HOSTNAME/mcp`. Cloudflare Access acts as both the edge gateway and OAuth 2.1 authorization server. CF Access injects a signed JWT via `Cf-Access-Jwt-Assertion`; a bridge middleware copies it to `Authorization: Bearer` for the go-sdk's `auth.RequireBearerToken` to validate. See `SECURITY.md` for the full security model.
 
+### Transport
+
+The streamable HTTP transport runs **stateless** (`internal/server/http.go`), which is what lets it serve protocol `2026-07-28` — the SDK accepts that revision only when sessions are off. Consequences worth knowing:
+
+- No `Mcp-Session-Id` is issued and no client is pinned to a process, so recreating the container on release does not invalidate what a connected client holds. Every POST carries its own peer info in `params._meta` and is answered on the spot.
+- Older clients are unaffected; they negotiate down to `2025-11-25` and go without a session id.
+- `GET` returns `405`, so the standalone SSE stream is gone and `/mcp/sse` serves POST only. Nothing here needs it: the server issues no server→client requests (elicitation, sampling, roots, logging), configures no `EventStore`, and pushes no unsolicited notifications — all of which stateless mode forbids or drops.
+- `PropagateRequestCancellation` ties tool handlers to the originating HTTP request, so a client that hangs up stops long-running work (ESPHome compiles and log captures, Frigate snapshots, HA websocket round trips) instead of leaving it running against the home network.
+- Clients on `2026-07-28` must mirror the JSON-RPC method into an `Mcp-Method` header (SEP-2243); a body/header mismatch is rejected with `-32020`. Request bodies are capped at the SDK's `DefaultMaxRequestBodyBytes`, over which the server returns `413`.
+
 ### Key packages
 
 - `cmd/mcp-server/` — Entrypoint. Parses config via Kong, starts HTTP, sets up tunnel, runs cloudflared.
 - `internal/config/` — Kong CLI struct with `envprefix` tags and `Enabled()`/`Validate()` methods.
-- `internal/server/` — Server factory. Creates `mcp.Server` and conditionally registers tool sets based on `config.CLI`.
+- `internal/server/` — Server factory. Creates `mcp.Server` and conditionally registers tool sets based on `config.CLI`. `http.go` builds the stateless streamable HTTP handler; `audit.go` is the tool-call audit middleware.
 - `internal/tunnel/` — Cloudflare Tunnel lifecycle: create/reuse tunnel via API, configure ingress rules, ensure DNS CNAME, get token, exec cloudflared. Auto-downloads cloudflared if not on PATH.
 - `internal/cfaccess/` — Cloudflare Access JWT validation and auto-discovery. `Discover()` finds the team domain and application AUD from the API. `TokenVerifier()` adapts JWT validation to the go-sdk's `auth.RequireBearerToken` interface.
 - `internal/middleware/` — HTTP request logging middleware.
