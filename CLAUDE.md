@@ -89,7 +89,7 @@ Clients connect directly to `https://CF_HOSTNAME/mcp`. Cloudflare Access acts as
 - `internal/middleware/` — HTTP request logging middleware.
 - `internal/mcputil/` — Shared MCP result helpers (`TextResult`, `JSONResult`).
 - `internal/validate/` — Input validation for path injection prevention.
-- `internal/hass/` — Home Assistant REST + WebSocket client and MCP tools.
+- `internal/hass/` — Home Assistant REST + WebSocket client and MCP tools. Also holds the generated tool layer: `selector.go` (HA selector → JSON Schema), `intents.go` (the intent catalog + `/api/intent/handle`), and `generated_tools.go` (startup registration of intent and per-script tools).
 - `internal/lists/` — To-do list management tools. Depends on the HA client.
 - `internal/media/` — Sonarr/Radarr client and MCP tools.
 - `internal/frigate/` — Frigate NVR client and MCP tools.
@@ -101,6 +101,28 @@ Tools use the go-sdk generic `mcp.AddTool[In, Out]` pattern:
 - Define an args struct with `json` and `jsonschema:"..."` tags (tag value is the description directly, no `description=` prefix)
 - Handler signature: `func(ctx context.Context, req *mcp.CallToolRequest, args T) (*mcp.CallToolResult, any, error)`
 - Return content via `*mcp.CallToolResult` with `TextContent`; the second return value (`any`) is unused
+
+### Generated tool layer
+
+Most tools are hand-written. Two families are generated at startup against the live instance (`hass.Tools.RegisterGenerated`, called from `internal/server`), so the tool list reflects what this particular Home Assistant actually has.
+
+This mirrors Home Assistant's own MCP server (`homeassistant/components/mcp_server`), which is a thin adapter over the "assist" LLM API in `homeassistant/helpers/llm.py` plus a per-integration `llm.py` platform. Two decisions were taken from upstream:
+
+- **Group by intent, not by domain or service.** A typical instance has 700+ services; one tool each is unusable. HA's answer is a curated set of cross-domain verbs — `HassTurnOn` covers light, switch, fan, lock and media_player at once — that each integration opts into. HA's intent handlers also resolve friendly names, areas and floors server-side, so callers say `area: "kitchen"` instead of looking up an `area_id` first.
+- **Do not generate tools from arbitrary services.** Upstream has a generic `ActionTool` but wired it to scripts only; its own comment says the parameter cache "only works for services which add their description directly to the service description cache. This is not the case for most services, but it is for scripts." So scripts are the one place we generate per-service tools too.
+
+Pieces:
+
+- `selector.go` — `SelectorToSchema` ports upstream's `selector_serializer` (~25 selector types) to Go, and `ServiceFieldsToSchema` turns a service's `fields` into an object schema. It flattens HA's collapsed `additional_fields` group and, because JSON Schema cannot express "applies only to entities whose `supported_color_modes` includes X", renders a field's `filter` as description prose instead of dropping it.
+- `intents.go` — `IntentCatalog` is the ported intent set, each with its slots and the domains it needs. `Client.HandleIntent` posts to `/api/intent/handle`; an unmatched intent returns HTTP 200 with an error response body, which is converted to a Go error so a no-op is not read as success.
+- `generated_tools.go` — registration. Intent tools register only when the instance has entities in the intent's domains (a vacuum-less home gets no vacuum tools); if the instance is unreachable the full catalog is registered rather than silently shrinking the tool list. Script tools come from the `script` domain in `GET /api/services`, with entity-registry aliases appended to the description as upstream does. Startup queries are bounded by `generateTimeout`.
+
+Three deliberate departures from upstream:
+
+- **Timer intents are excluded.** Upstream gates them on `llm_context.device_id` being a voice satellite that supports timers; a REST caller has no such device, so those intents could never match.
+- **A target is required.** `vol.Any("name", "area", "floor")` in upstream's `DynamicServiceIntentHandler` is a key *matcher*, not a requirement — unmarked voluptuous keys are optional — so HA accepts an untargeted intent and matches every entity in scope. That is a fine voice-assistant default and a poor tool-call one, so the generated schemas require at least one of `name`/`area`/`floor`/`domain`. `domain` counts, so "turn off all the lights" still works.
+- **Intent tools are gated on `HASS_DENY_SERVICES`.** `/api/intent/handle` takes an intent name rather than a service, so `CallService`'s policy check never runs. Each `IntentDef` therefore declares the services it can dispatch (`HassTurnOff` reaches `lock.unlock`, `cover.close_cover`, `valve.close_valve`, `button.press`), and an intent whose services include a denied one is not registered at all. Conservative by design: resolution happens inside HA's handler, so there is no later point at which to check.
+- **Generated tools validate their own input.** The go-sdk only validates arguments for tools added via the generic `mcp.AddTool`, which derives and resolves a schema from a Go type. Runtime-schema tools go through `Server.AddTool`, which advertises the schema but does not enforce it, so `decodeArgs` resolves and validates against it explicitly. Without this, `home_turn_on` with no `name`/`area`/`floor` would reach Home Assistant instead of being rejected.
 
 ### Service Clients
 
@@ -150,6 +172,29 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `get_calendar_events` | Upcoming events from HA calendar entities (lists calendars when entity_id is omitted) |
 | `manage_dashboards` | List/read/save/delete Lovelace dashboard configs and create/update/delete storage dashboards (save_config overwrites the whole config) |
 | `manage_dashboard_resources` | CRUD for Lovelace dashboard resources (custom JS/CSS modules) |
+| `manage_entity_state` | Write or delete an entity's state directly in the state machine (virtual entities; does not control devices) |
+| `fire_home_event` | Fire an event on the event bus (triggers automations listening for it) |
+| `get_home_config` | Core config (version, unit system, time zone, location), loaded components, and `configuration.yaml` validation (`kind=check`) |
+
+**Generated tools** (requires HA; registered at startup from the live instance):
+
+These are not hand-written. At startup the server queries the instance and generates two families of tools, mirroring what Home Assistant's own MCP server does. See "Generated tool layer" below.
+
+| Tool | Description |
+|------|-------------|
+| `home_turn_on` / `home_turn_off` | Turn on/open/start or turn off/close/stop anything, by entity name, area, or floor |
+| `home_set_position` / `home_stop_moving` | Position or stop a cover or valve |
+| `home_light_set` | Set a light's brightness percentage, color name, or color temperature |
+| `home_climate_set_temperature` | Set a thermostat's target temperature |
+| `home_fan_set_speed` | Set a fan's speed percentage |
+| `home_media_pause` / `_unpause` / `_next` / `_previous` | Media player transport control |
+| `home_set_volume` / `home_set_volume_relative` | Set absolute or relative media player volume |
+| `home_media_player_mute` / `_unmute` | Mute or unmute a media player |
+| `home_media_search_and_play` | Search for media and play the first result |
+| `home_vacuum_start` / `_return_to_base` / `_clean_area` | Vacuum control |
+| `home_humidifier_setpoint` / `home_humidifier_mode` | Humidifier target humidity and mode |
+| `home_list_add_item` / `_complete_item` / `_remove_item` | To-do and shopping list items |
+| `home_script_<object_id>` | One tool per script, with parameters from the script's declared `fields` |
 
 **Lists** (requires HA):
 

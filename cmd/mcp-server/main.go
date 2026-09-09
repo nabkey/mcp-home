@@ -60,7 +60,7 @@ func run(cli config.CLI, logger *slog.Logger) error {
 
 	logger.Info("starting MCP HTTP server", "addr", addr)
 
-	srv := server.New(cli, version, logger)
+	srv := server.New(ctx, cli, version, logger)
 	handler := mcp.NewStreamableHTTPHandler(
 		func(req *http.Request) *mcp.Server { return srv },
 		&mcp.StreamableHTTPOptions{
