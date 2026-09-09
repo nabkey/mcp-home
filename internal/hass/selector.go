@@ -136,6 +136,18 @@ func SelectorToSchema(sel map[string]any) *jsonschema.Schema {
 		}
 		return s
 
+	case "condition":
+		// Upstream maps this to cv.CONDITIONS_SCHEMA: a list of condition
+		// objects. Falling through to the string default would advertise the
+		// wrong shape and reject the only value that works.
+		return &jsonschema.Schema{
+			Type: "array",
+			Items: &jsonschema.Schema{
+				Type:                 "object",
+				AdditionalProperties: &jsonschema.Schema{},
+			},
+		}
+
 	case "constant":
 		if v, ok := cfg["value"]; ok {
 			c := v
@@ -346,6 +358,11 @@ func collectServiceFields(fields map[string]any, props map[string]*jsonschema.Sc
 	}
 	sort.Strings(names)
 
+	// Fields at this level are added before any collapsed group is flattened
+	// in, so a nested field can never shadow a same-named one here. Doing it
+	// in one pass would make the winner depend on where the group's name
+	// happens to sort.
+	var groups []map[string]any
 	for _, name := range names {
 		cfg, _ := fields[name].(map[string]any)
 		if cfg == nil {
@@ -355,20 +372,32 @@ func collectServiceFields(fields map[string]any, props map[string]*jsonschema.Sc
 		// selector of its own; flatten its members up into this level.
 		if nested, ok := cfg["fields"].(map[string]any); ok {
 			if _, hasSelector := cfg["selector"]; !hasSelector {
-				collectServiceFields(nested, props, required)
+				groups = append(groups, nested)
 				continue
 			}
 		}
+		addServiceField(name, cfg, props, required)
+	}
 
-		sel, _ := cfg["selector"].(map[string]any)
-		schema := SelectorToSchema(sel)
-		schema.Description = fieldDescription(name, cfg)
-		if ex, ok := cfg["example"]; ok {
-			schema.Examples = []any{ex}
-		}
-		props[name] = schema
-		if boolFromConfig(cfg, "required") {
-			*required = append(*required, name)
-		}
+	for _, nested := range groups {
+		collectServiceFields(nested, props, required)
+	}
+}
+
+// addServiceField adds one field's schema, leaving an already-present name
+// alone so a flattened group cannot overwrite an outer field.
+func addServiceField(name string, cfg map[string]any, props map[string]*jsonschema.Schema, required *[]string) {
+	if _, exists := props[name]; exists {
+		return
+	}
+	sel, _ := cfg["selector"].(map[string]any)
+	schema := SelectorToSchema(sel)
+	schema.Description = fieldDescription(name, cfg)
+	if ex, ok := cfg["example"]; ok {
+		schema.Examples = []any{ex}
+	}
+	props[name] = schema
+	if boolFromConfig(cfg, "required") {
+		*required = append(*required, name)
 	}
 }

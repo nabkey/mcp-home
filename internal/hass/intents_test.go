@@ -22,7 +22,7 @@ func TestHandleIntentSendsNameAndData(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"speech": {"plain": {"speech": "Turned on the lights", "extra_data": null}},
 			"response_type": "action_done",
-			"data": {"targets": [], "success": [{"id": "light.kitchen", "name": "Kitchen", "type": "entity"}], "failed": []}
+			"data": {"success": [{"id": "light.kitchen", "name": "Kitchen", "type": "entity"}], "failed": []}
 		}`))
 	})
 
@@ -219,7 +219,7 @@ func TestHandleIntentAllTargetsFailedIsAnError(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"speech": {"plain": {"speech": "Kitchen light is unavailable"}},
 			"response_type": "action_done",
-			"data": {"success": [], "failed": [{"id": "light.kitchen", "name": "Kitchen"}], "targets": []}
+			"data": {"success": [], "failed": [{"id": "light.kitchen", "name": "Kitchen"}]}
 		}`))
 	})
 

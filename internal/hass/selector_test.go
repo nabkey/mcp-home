@@ -348,3 +348,59 @@ func TestSelectorToSchemaSelectStillEnforcesRealOptions(t *testing.T) {
 		t.Error("accepted a value outside the declared options")
 	}
 }
+
+// Upstream maps ConditionSelector to cv.CONDITIONS_SCHEMA — a list of
+// condition objects. The string default would advertise a shape that rejects
+// the only value the field accepts.
+func TestSelectorToSchemaCondition(t *testing.T) {
+	schema := SelectorToSchema(map[string]any{"condition": nil})
+	got := schemaJSON(t, schema)
+	if got["type"] != "array" {
+		t.Fatalf("type = %v, want array", got["type"])
+	}
+	items, _ := got["items"].(map[string]any)
+	if items["type"] != "object" {
+		t.Errorf("items.type = %v, want object", items["type"])
+	}
+
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	conditions := []any{map[string]any{"condition": "state", "entity_id": "light.a", "state": "on"}}
+	if err := resolved.Validate(conditions); err != nil {
+		t.Errorf("rejected a valid condition list: %v", err)
+	}
+}
+
+// A collapsed group must not shadow a same-named field at the outer level,
+// whichever way the group's name happens to sort.
+func TestServiceFieldsToSchemaCollapsedGroupDoesNotShadow(t *testing.T) {
+	for _, groupName := range []string{"additional_fields", "zz_later_group"} {
+		raw := `{
+			"mode": {"selector": {"select": {"options": ["outer"]}}, "required": true},
+			"` + groupName + `": {"collapsed": true, "fields": {
+				"mode": {"selector": {"number": {"min": 0, "max": 1}}},
+				"only_nested": {"selector": {"text": null}}
+			}}
+		}`
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+			t.Fatalf("bad fixture: %v", err)
+		}
+		got := schemaJSON(t, ServiceFieldsToSchema(fields))
+		props, _ := got["properties"].(map[string]any)
+
+		mode, _ := props["mode"].(map[string]any)
+		if mode["type"] != "string" {
+			t.Errorf("group %q: outer field was shadowed by the nested one (type = %v)", groupName, mode["type"])
+		}
+		if _, ok := props["only_nested"]; !ok {
+			t.Errorf("group %q: non-colliding nested field was dropped", groupName)
+		}
+		req, _ := got["required"].([]any)
+		if len(req) != 1 || req[0] != "mode" {
+			t.Errorf("group %q: required = %v, want [mode]", groupName, got["required"])
+		}
+	}
+}

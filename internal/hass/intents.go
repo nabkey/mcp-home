@@ -417,10 +417,11 @@ func (d IntentDef) InputSchema() *jsonschema.Schema {
 	return schema
 }
 
-// IntentResult is the useful part of an intent response.
+// IntentResult is the useful part of an intent response. IntentResponse.as_dict
+// puts either "code" (on an error) or "success"/"failed" under "data", and
+// nothing else, so those are the only fields worth lifting out.
 type IntentResult struct {
 	Speech  string           `json:"speech,omitempty"`
-	Targets []map[string]any `json:"targets,omitempty"`
 	Success []map[string]any `json:"success,omitempty"`
 	Failed  []map[string]any `json:"failed,omitempty"`
 	Raw     map[string]any   `json:"raw,omitempty"`
@@ -451,7 +452,6 @@ func (c *Client) HandleIntent(ctx context.Context, name string, slots map[string
 		}
 	}
 	if data, ok := raw["data"].(map[string]any); ok {
-		result.Targets = mapSlice(data["targets"])
 		result.Success = mapSlice(data["success"])
 		result.Failed = mapSlice(data["failed"])
 		// An intent that matched nothing still returns HTTP 200 with an error

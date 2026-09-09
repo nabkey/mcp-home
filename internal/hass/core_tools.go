@@ -59,7 +59,9 @@ func (t *Tools) registerFireHomeEvent(server *mcp.Server) {
 		Name: "fire_home_event",
 		Description: "Fire an event on the Home Assistant event bus. Useful for triggering automations that listen " +
 			"for a custom event type. Use get_home_events to see what has fired recently.",
-		Annotations: mcputil.Additive(),
+		// Firing an event runs whatever automations listen for it, which is
+		// as open-ended as call_home_service or execute_script.
+		Annotations: mcputil.Destructive(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args fireHomeEventArgs) (*mcp.CallToolResult, any, error) {
 		msg, err := t.client.FireEvent(ctx, args.EventType, args.Data)
 		if err != nil {
