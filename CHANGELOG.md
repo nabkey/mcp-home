@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/nabkey/mcp-home/compare/v1.8.1...v1.9.0) (2026-09-09)
+
+
+### Features
+
+* **hass:** generate intent and script tools from the live instance ([#43](https://github.com/nabkey/mcp-home/issues/43)) ([6775070](https://github.com/nabkey/mcp-home/commit/67750706f00a416b4c4f741ca5c7a9de204b8d33))
+
 ## [1.8.1](https://github.com/nabkey/mcp-home/compare/v1.8.0...v1.8.1) (2026-07-12)
 
 
