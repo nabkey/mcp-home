@@ -22,6 +22,7 @@ func testHandler(t *testing.T) http.Handler {
 	}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pong"}}}, nil, nil
 	})
+	srv.AddReceivingMiddleware(cacheHintMiddleware())
 	return NewHTTPHandler(srv, nil)
 }
 
@@ -168,5 +169,22 @@ func TestOversizedBodyRejected(t *testing.T) {
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 413", rec.Code)
+	}
+}
+
+// The SDK applies its own cacheable defaults inside the list handler, so this
+// checks the hint survives to the wire rather than being overwritten.
+func TestCacheHintReachesTheWire(t *testing.T) {
+	rec := postToolsList(t, testHandler(t), nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"ttlMs":300000`) {
+		t.Errorf("response missing the 5m TTL hint: %s", body)
+	}
+	if !strings.Contains(body, `"cacheScope":"private"`) {
+		t.Errorf("response missing private cache scope: %s", body)
 	}
 }

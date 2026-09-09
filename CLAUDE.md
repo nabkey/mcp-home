@@ -88,6 +88,7 @@ The streamable HTTP transport runs **stateless** (`internal/server/http.go`), wh
 - `GET` returns `405`, so the standalone SSE stream is gone and `/mcp/sse` serves POST only. Nothing here needs it: the server issues no server→client requests (elicitation, sampling, roots, logging), configures no `EventStore`, and pushes no unsolicited notifications — all of which stateless mode forbids or drops.
 - `PropagateRequestCancellation` ties tool handlers to the originating HTTP request, so a client that hangs up stops long-running work (ESPHome compiles and log captures, Frigate snapshots, HA websocket round trips) instead of leaving it running against the home network.
 - Clients on `2026-07-28` must mirror the JSON-RPC method into an `Mcp-Method` header (SEP-2243); a body/header mismatch is rejected with `-32020`. Request bodies are capped at the SDK's `DefaultMaxRequestBodyBytes`, over which the server returns `413`.
+- `tools/list` carries a 5-minute freshness hint (`ttlMs`, SEP-2549) from `cacheHintMiddleware` in `internal/server/cache.go`. The list is fixed for the process lifetime — static tools and generated ones are both registered at startup — so the TTL exists to bound how long a client keeps calling tools a redeploy has removed, not to track in-process change. Scope is `private`, not the SDK's `public` default: the list describes this specific home (script names, areas, device names) and no intermediary should be serving it to anyone else. Paginated pages are left unhinted, since a page is only meaningful next to its cursor.
 
 ### Key packages
 
