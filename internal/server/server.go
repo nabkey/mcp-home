@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,7 +16,9 @@ import (
 
 // New creates a configured MCP server with tools registered based on cfg.
 // version is the build version injected into the binary (e.g. "1.4.0" or "dev").
-func New(cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
+// ctx bounds the startup queries that generated tools make against Home
+// Assistant to decide what to register.
+func New(ctx context.Context, cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "mcp-home",
 		Version: version,
@@ -34,6 +37,10 @@ func New(cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
 		} else {
 			hassTools.Register(server)
 			logger.Info("Home Assistant tools registered")
+
+			// Intent and per-script tools are generated from the live
+			// instance, so they must be registered after the static set.
+			hassTools.RegisterGenerated(ctx, server)
 
 			listTools, err := lists.NewTools(hassTools.Client())
 			if err != nil {
