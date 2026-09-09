@@ -53,7 +53,7 @@ All config is via environment variables (or CLI flags). Uses [Kong](https://gith
 
 `LOG_LEVEL` (debug/info/warn/error) controls slog verbosity. Every tool call is audit-logged with the CF Access user via an MCP receiving middleware (`internal/server/audit.go`). All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
 
-Config struct definitions are in `internal/config/config.go`. Each optional group has `Enabled() bool` and `Validate() error` methods. Validation runs via Kong's `AfterApply` hook.
+Config struct definitions are in `internal/config/config.go`. Each optional group has `Enabled() bool` and `Validate() error` methods. Kong invokes `Validate()` on each embedded group during `Parse`, so a group enforces its all-or-nothing rule just by defining the method.
 
 ### Prerequisites
 
@@ -82,7 +82,7 @@ Clients connect directly to `https://CF_HOSTNAME/mcp`. Cloudflare Access acts as
 ### Key packages
 
 - `cmd/mcp-server/` — Entrypoint. Parses config via Kong, starts HTTP, sets up tunnel, runs cloudflared.
-- `internal/config/` — Kong CLI struct with `envprefix` tags, `Enabled()`/`Validate()` methods, and `AfterApply` hook.
+- `internal/config/` — Kong CLI struct with `envprefix` tags and `Enabled()`/`Validate()` methods.
 - `internal/server/` — Server factory. Creates `mcp.Server` and conditionally registers tool sets based on `config.CLI`.
 - `internal/tunnel/` — Cloudflare Tunnel lifecycle: create/reuse tunnel via API, configure ingress rules, ensure DNS CNAME, get token, exec cloudflared. Auto-downloads cloudflared if not on PATH.
 - `internal/cfaccess/` — Cloudflare Access JWT validation and auto-discovery. `Discover()` finds the team domain and application AUD from the API. `TokenVerifier()` adapts JWT validation to the go-sdk's `auth.RequireBearerToken` interface.
