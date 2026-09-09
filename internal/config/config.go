@@ -10,6 +10,11 @@ import (
 
 // CLI is the root configuration struct, parsed by Kong.
 // Environment variables are resolved via envprefix + env tags.
+//
+// Kong calls Validate on every embedded group during Parse (it walks embed:""
+// fields as of v1.16.0), so an optional group enforces its own all-or-nothing
+// rule just by defining the method. There is deliberately no AfterApply hook
+// here dispatching to them by hand.
 type CLI struct {
 	Cloudflare CloudflareConfig `embed:"" prefix:"cf-"      envprefix:"CF_"`
 	Insecure   bool             `env:"INSECURE" default:"false" help:"Skip Cloudflare Access JWT validation (DANGEROUS: exposes server without auth)"`
@@ -20,19 +25,6 @@ type CLI struct {
 	Frigate    FrigateConfig    `embed:"" prefix:"frigate-" envprefix:"FRIGATE_"`
 	ESPHome    ESPHomeConfig    `embed:"" prefix:"esphome-" envprefix:"ESPHOME_"`
 	Version    kong.VersionFlag `short:"V" help:"Print version and exit."`
-}
-
-// AfterApply is called by Kong after all values are resolved.
-// It validates that optional groups are fully configured or not at all.
-func (cli *CLI) AfterApply() error {
-	for _, v := range []interface{ Validate() error }{
-		cli.Hass, cli.Sonarr, cli.Radarr,
-	} {
-		if err := v.Validate(); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // CloudflareConfig holds required Cloudflare Tunnel settings.

@@ -30,6 +30,9 @@ func New(ctx context.Context, cfg config.CLI, version string, logger *slog.Logge
 	// Audit every tool call with the authenticated user.
 	server.AddReceivingMiddleware(auditMiddleware(logger))
 
+	// Let clients cache the tool list instead of re-fetching it every turn.
+	server.AddReceivingMiddleware(cacheHintMiddleware())
+
 	if cfg.Hass.Enabled() {
 		hassTools, err := hass.NewTools(cfg.Hass.URL, cfg.Hass.Token, cfg.Hass.DenyServices)
 		if err != nil {

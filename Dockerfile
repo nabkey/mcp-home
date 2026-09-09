@@ -18,10 +18,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Pinned for reproducible builds; Dependabot does not track this, so bump
 # CLOUDFLARED_VERSION when updating. Override either arg at build time, e.g.
-#   --build-arg CLOUDFLARED_VERSION=2026.6.0
+#   --build-arg CLOUDFLARED_VERSION=2026.8.3
 FROM --platform=$BUILDPLATFORM alpine:3.24 AS cloudflared
 ARG TARGETARCH
-ARG CLOUDFLARED_VERSION=2026.6.0
+ARG CLOUDFLARED_VERSION=2026.8.3
 ARG CLOUDFLARED_URL=https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}
 ADD --chmod=0755 ${CLOUDFLARED_URL}/cloudflared-linux-${TARGETARCH} /cloudflared
 
