@@ -43,7 +43,7 @@ Run `go run ./cmd/mcp-server --help` for all flags and their corresponding envir
 
 ### Prerequisites
 
-- Go 1.26+
+- Go 1.27+
 - A Cloudflare account with a domain
 - A [Cloudflare API token](https://dash.cloudflare.com/profile/api-tokens) with Tunnel:Edit, DNS:Edit, and Access:Read permissions
 - A self-hosted Cloudflare Access application on your chosen hostname with OAuth enabled
