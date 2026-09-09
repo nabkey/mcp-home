@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.1](https://github.com/nabkey/mcp-home/compare/v1.9.0...v1.9.1) (2026-09-09)
+
+
+### Bug Fixes
+
+* **deps:** update Go to 1.27.1 to clear stdlib vulncheck failures ([#45](https://github.com/nabkey/mcp-home/issues/45)) ([a03e235](https://github.com/nabkey/mcp-home/commit/a03e2350a4676de52101aff02dcf8139c31e6107))
+
 ## [1.9.0](https://github.com/nabkey/mcp-home/compare/v1.8.1...v1.9.0) (2026-09-09)
 
 
