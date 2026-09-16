@@ -21,10 +21,13 @@ import (
 //
 // Nothing here needs sessions to survive. Stateless mode forbids
 // server->client requests and drops stream resumption and the standalone GET
-// stream; this server issues no elicitation, sampling, roots or logging
-// requests, configures no EventStore, and pushes no unsolicited
-// notifications. The visible cost is that GET returns 405, so /mcp/sse serves
-// POST only.
+// stream; this server issues no sampling, roots or logging requests,
+// configures no EventStore, and pushes no unsolicited notifications. The one
+// server-to-client interaction it has, the confirmation prompt on destructive
+// tools (mcputil.Confirm), is embedded in the tool result as a multi
+// round-trip input request rather than sent as a request, which is exactly
+// the form stateless mode allows. The visible cost is that GET returns 405,
+// so /mcp/sse serves POST only.
 func NewHTTPHandler(srv *mcp.Server, logger *slog.Logger) http.Handler {
 	return mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return srv },

@@ -8,6 +8,15 @@ import (
 	"github.com/nabkey/mcp-home/internal/mcputil"
 )
 
+// dashboardName renders a url_path for a confirmation prompt; the default
+// overview dashboard has an empty one.
+func dashboardName(urlPath string) string {
+	if urlPath == "" {
+		return "the default overview"
+	}
+	return urlPath
+}
+
 // --- manage_dashboards ---
 
 type manageDashboardsArgs struct {
@@ -50,12 +59,18 @@ func (t *Tools) registerManageDashboards(server *mcp.Server) {
 			if args.Config == nil {
 				return mcputil.TextResult("Error: config is required for save_config (read get_config first, then save the whole modified object)"), nil, nil
 			}
+			if ok, res := mcputil.Confirm(req, "Replace the entire config of dashboard "+dashboardName(args.URLPath)); !ok {
+				return res, nil, nil
+			}
 			if err := wsClient.SaveDashboardConfig(args.URLPath, args.Config); err != nil {
 				return mcputil.Errorf("%v", err), nil, nil
 			}
 			return mcputil.JSONResult(map[string]any{"status": "saved", "url_path": args.URLPath})
 
 		case "delete_config":
+			if ok, res := mcputil.Confirm(req, "Discard the saved config of dashboard "+dashboardName(args.URLPath)+" and revert it to auto-generated"); !ok {
+				return res, nil, nil
+			}
 			if err := wsClient.DeleteDashboardConfig(args.URLPath); err != nil {
 				return mcputil.Errorf("%v", err), nil, nil
 			}
@@ -87,6 +102,9 @@ func (t *Tools) registerManageDashboards(server *mcp.Server) {
 		case "delete":
 			if args.DashboardID == "" {
 				return mcputil.TextResult("Error: dashboard_id is required for delete"), nil, nil
+			}
+			if ok, res := mcputil.Confirm(req, "Delete dashboard "+args.DashboardID); !ok {
+				return res, nil, nil
 			}
 			if err := wsClient.DeleteDashboard(args.DashboardID); err != nil {
 				return mcputil.Errorf("%v", err), nil, nil

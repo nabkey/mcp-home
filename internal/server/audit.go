@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/mcputil"
 )
 
 // maxAuditArgsLen bounds how much of a tool call's arguments end up in the
@@ -36,6 +37,17 @@ func auditMiddleware(logger *slog.Logger) mcp.Middleware {
 				args = truncate(string(p.Arguments), maxAuditArgsLen)
 			}
 
+			// What the client negotiated decides whether Confirm can ask it
+			// anything; log it so the deployed server shows which clients
+			// actually get confirmation prompts.
+			ss, _ := req.GetSession().(*mcp.ServerSession)
+			protocol := ""
+			if ss != nil {
+				if p := ss.InitializeParams(); p != nil {
+					protocol = p.ProtocolVersion
+				}
+			}
+
 			start := time.Now()
 			result, err := next(ctx, method, req)
 
@@ -54,6 +66,8 @@ func auditMiddleware(logger *slog.Logger) mcp.Middleware {
 				"user", user,
 				"args", args,
 				"outcome", outcome,
+				"protocol", protocol,
+				"elicitation", mcputil.CanElicit(ss),
 				"duration", time.Since(start).Round(time.Millisecond),
 			)
 			return result, err

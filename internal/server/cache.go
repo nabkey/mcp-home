@@ -17,55 +17,40 @@ import (
 // minutes rather than hours despite the list being immutable in-process.
 const toolListTTL = 5 * time.Minute
 
-// cacheHintMiddleware attaches a freshness hint to tools/list responses
-// (SEP-2549). Without it TTLMs is 0, which tells clients the response is
-// immediately stale, so every conversation re-fetches a list that here runs to
-// dozens of tools each carrying a full JSON Schema.
+// setCacheable is the ServerOptions.SetCacheable policy: it attaches a
+// freshness hint (SEP-2549) to tools/list and server/discover responses.
+// Without it TTLMs is 0, which tells clients the response is immediately
+// stale, so every conversation re-fetches a list that here runs to dozens of
+// tools each carrying a full JSON Schema.
 //
 // The scope is deliberately "private" rather than the SDK's "public" default.
 // The list is not sensitive in the credential sense, but it is a description
 // of this specific home — script names, areas, floors, device names — and
 // "public" would let any intermediary cache and serve it. Only the requesting
-// user's client has a reason to hold it.
-func cacheHintMiddleware() mcp.Middleware {
-	return func(next mcp.MethodHandler) mcp.MethodHandler {
-		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-			result, err := next(ctx, method, req)
-			if err != nil || method != "tools/list" {
-				return result, err
-			}
-			r, ok := result.(*mcp.ListToolsResult)
-			if !ok {
-				return result, err
-			}
-			// Hint only a response that is the whole list. An empty NextCursor
-			// alone is not enough: the last page of a paginated walk has one
-			// too, and a client keying its cache by method rather than cursor
-			// would then hold a partial tool list. So require that the request
-			// asked for the first page as well.
-			//
-			// Inert while the server leaves ServerOptions.PageSize unset, since
-			// tools/list is then always a single page — but that is a default,
-			// not a guarantee.
-			if r.NextCursor != "" || requestCursor(req) != "" {
-				return result, err
-			}
-			r.TTLMs = int(toolListTTL / time.Millisecond)
-			r.CacheScope = "private"
-			return result, err
-		}
-	}
-}
-
-// requestCursor reports the pagination cursor a tools/list request carried, or
-// "" when it asked for the first page.
-func requestCursor(req mcp.Request) string {
+// user's client has a reason to hold it. server/discover carries the same
+// instructions text and capabilities, so it gets the same treatment.
+//
+// The hook sees the request but not the result, so it cannot tell a complete
+// list from the first page of a paginated walk. It hints only a request for
+// the first page and relies on ServerOptions.PageSize being unset, which makes
+// tools/list a single page; TestToolListIsSinglePage pins that. A request
+// with a cursor is left unhinted, since a page is only meaningful next to its
+// cursor.
+//
+// Runs with the server's lock held: it must not call back into the server.
+func setCacheable(_ context.Context, req mcp.Request, c *mcp.Cacheable) {
 	if req == nil {
-		return ""
+		return
 	}
-	p, ok := req.GetParams().(*mcp.ListToolsParams)
-	if !ok {
-		return ""
+	switch p := req.GetParams().(type) {
+	case *mcp.ListToolsParams:
+		if p != nil && p.Cursor != "" {
+			return
+		}
+	case *mcp.DiscoverParams:
+	default:
+		return
 	}
-	return p.Cursor
+	c.TTLMs = int(toolListTTL / time.Millisecond)
+	c.CacheScope = "private"
 }

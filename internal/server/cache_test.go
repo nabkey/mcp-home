@@ -2,77 +2,96 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// listRequest builds a tools/list request asking for the page after cursor.
 func listRequest(cursor string) mcp.Request {
 	return &mcp.ServerRequest[*mcp.ListToolsParams]{
 		Params: &mcp.ListToolsParams{Cursor: cursor},
 	}
 }
 
-func throughCacheHint(t *testing.T, method string, req mcp.Request, result mcp.Result) mcp.Result {
-	t.Helper()
-	next := func(context.Context, string, mcp.Request) (mcp.Result, error) {
-		return result, nil
-	}
-	got, err := cacheHintMiddleware()(next)(context.Background(), method, req)
-	if err != nil {
-		t.Fatalf("middleware: %v", err)
-	}
-	return got
-}
-
 func TestCacheHintOnToolList(t *testing.T) {
-	got := throughCacheHint(t, "tools/list", listRequest(""), &mcp.ListToolsResult{
-		Tools: []*mcp.Tool{{Name: "ping"}},
-	})
+	var c mcp.Cacheable
+	setCacheable(context.Background(), listRequest(""), &c)
 
-	res, ok := got.(*mcp.ListToolsResult)
-	if !ok {
-		t.Fatalf("result type = %T", got)
-	}
-	if res.TTLMs != int(toolListTTL.Milliseconds()) {
-		t.Errorf("TTLMs = %d, want %d", res.TTLMs, toolListTTL.Milliseconds())
+	if c.TTLMs != int(toolListTTL.Milliseconds()) {
+		t.Errorf("TTLMs = %d, want %d", c.TTLMs, toolListTTL.Milliseconds())
 	}
 	// "public" would let any intermediary cache a description of this home.
-	if res.CacheScope != "private" {
-		t.Errorf("CacheScope = %q, want private", res.CacheScope)
+	if c.CacheScope != "private" {
+		t.Errorf("CacheScope = %q, want private", c.CacheScope)
 	}
 }
 
-// A page is only meaningful next to its cursor, so a partial list gets no hint.
+func TestCacheHintOnDiscover(t *testing.T) {
+	var c mcp.Cacheable
+	setCacheable(context.Background(), &mcp.ServerRequest[*mcp.DiscoverParams]{Params: &mcp.DiscoverParams{}}, &c)
+
+	if c.TTLMs == 0 || c.CacheScope != "private" {
+		t.Errorf("discover hint = %+v, want private with a TTL", c)
+	}
+}
+
+// A page is only meaningful next to its cursor, so a later page gets no hint.
 func TestNoCacheHintOnPaginatedPage(t *testing.T) {
-	got := throughCacheHint(t, "tools/list", listRequest(""), &mcp.ListToolsResult{
-		Tools:      []*mcp.Tool{{Name: "ping"}},
-		NextCursor: "more",
-	})
+	var c mcp.Cacheable
+	setCacheable(context.Background(), listRequest("page-2"), &c)
 
-	if res := got.(*mcp.ListToolsResult); res.TTLMs != 0 {
-		t.Errorf("TTLMs = %d, want 0 for a paginated page", res.TTLMs)
+	if c.TTLMs != 0 {
+		t.Errorf("TTLMs = %d, want 0 for a paginated page", c.TTLMs)
 	}
 }
 
-// The last page of a paginated walk also has an empty NextCursor, so the
-// response alone cannot tell it apart from a complete list. The request cursor
-// can: a client that asked for a later page did not receive the whole list.
-func TestNoCacheHintOnFinalPageOfWalk(t *testing.T) {
-	got := throughCacheHint(t, "tools/list", listRequest("page-2"), &mcp.ListToolsResult{
-		Tools: []*mcp.Tool{{Name: "ping"}},
-	})
-
-	if res := got.(*mcp.ListToolsResult); res.TTLMs != 0 {
-		t.Errorf("TTLMs = %d, want 0 for the final page of a paginated walk", res.TTLMs)
-	}
-}
-
-// Only tools/list is hinted; a call result must pass through untouched.
+// Only tools/list and server/discover are hinted; other cacheable results are
+// left as their handler produced them.
 func TestCacheHintIgnoresOtherMethods(t *testing.T) {
-	in := &mcp.CallToolResult{}
-	if got := throughCacheHint(t, "tools/call", nil, in); got != mcp.Result(in) {
-		t.Errorf("result was replaced for tools/call")
+	var c mcp.Cacheable
+	setCacheable(context.Background(), &mcp.ServerRequest[*mcp.ListPromptsParams]{Params: &mcp.ListPromptsParams{}}, &c)
+
+	if c.TTLMs != 0 || c.CacheScope != "" {
+		t.Errorf("prompts/list hint = %+v, want untouched", c)
+	}
+}
+
+// The hook hints the first page without seeing the result, so it is only
+// correct while tools/list is a single page. Pin that through a real
+// round-trip: the whole list comes back hinted with no NextCursor.
+func TestToolListIsSinglePage(t *testing.T) {
+	ctx := context.Background()
+	srv := newServer("test", slog.New(slog.DiscardHandler))
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		srv.AddTool(&mcp.Tool{Name: name, InputSchema: map[string]any{"type": "object"}},
+			func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{}, nil
+			})
+	}
+
+	ct, st := mcp.NewInMemoryTransports()
+	if _, err := srv.Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cs.Close() }()
+
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NextCursor != "" {
+		t.Fatalf("tools/list paginated (NextCursor=%q); setCacheable assumes a single page", res.NextCursor)
+	}
+	if len(res.Tools) != 3 {
+		t.Errorf("got %d tools, want 3", len(res.Tools))
+	}
+	if res.TTLMs != int(toolListTTL.Milliseconds()) || res.CacheScope != "private" {
+		t.Errorf("hint = ttl %d scope %q, want %d private", res.TTLMs, res.CacheScope, toolListTTL.Milliseconds())
 	}
 }
