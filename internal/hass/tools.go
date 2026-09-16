@@ -275,6 +275,9 @@ func (t *Tools) registerManageAutomations(server *mcp.Server) {
 			if args.ID == "" {
 				return mcputil.TextResult("Error: id is required for delete"), nil, nil
 			}
+			if ok, res := mcputil.Confirm(req, "Delete automation "+args.ID); !ok {
+				return res, nil, nil
+			}
 			if err := t.client.DeleteAutomation(ctx, args.ID); err != nil {
 				return mcputil.Errorf("%v", err), nil, nil
 			}

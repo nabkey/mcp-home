@@ -105,7 +105,8 @@ The streamable HTTP transport runs **stateless** (`internal/server/http.go`), wh
 
 - No `Mcp-Session-Id` is issued and no client is pinned to a process, so recreating the container on release does not invalidate what a connected client holds. Every POST carries its own peer info in `params._meta` and is answered on the spot.
 - Older clients are unaffected; they negotiate down to `2025-11-25` and go without a session id.
-- `GET` returns `405`, so the standalone SSE stream is gone and `/mcp/sse` serves POST only. Nothing here needs it: the server issues no server→client requests (elicitation, sampling, roots, logging), configures no `EventStore`, and pushes no unsolicited notifications — all of which stateless mode forbids or drops.
+- `GET` returns `405`, so the standalone SSE stream is gone and `/mcp/sse` serves POST only. Nothing here needs it: the server issues no server→client requests (sampling, roots, logging), configures no `EventStore`, and pushes no unsolicited notifications — all of which stateless mode forbids or drops. The one interaction that runs the other way, confirmation prompts, is embedded in the tool result instead (next bullet).
+- **Destructive tools ask before acting** through multi round-trip requests (SEP-2322). `mcputil.Confirm` returns an input-required result carrying a yes/no form; the client shows it and retries the same call with the answer in `inputResponses`, so nothing is held open and the stateless transport is unaffected. It is gated on the client having negotiated `2026-07-28` *and* advertising form elicitation, because an older client can only be asked via `elicitation/create`, which stateless mode cannot deliver; such a client gets the pre-confirmation behaviour, the tool just runs. Today it guards `upload_esphome`, `write_esphome_file` when the file already exists, `manage_dashboards` `save_config`/`delete_config`/`delete`, and `manage_automations` `delete`. The audit log records each call's `protocol` and `elicitation` so the deployed server shows which clients are actually being asked; Claude Code on its v2 runtime is, and claude.ai's connector was unverified when this shipped.
 - `PropagateRequestCancellation` ties tool handlers to the originating HTTP request, so a client that hangs up stops long-running work (ESPHome compiles and log captures, Frigate snapshots, HA websocket round trips) instead of leaving it running against the home network. **This applies only to clients on `2026-07-28`**, where the POST is the whole request lifecycle; for an older client the option is a no-op and an abandoned request still runs to completion.
 - Clients on `2026-07-28` must mirror the JSON-RPC method into an `Mcp-Method` header (SEP-2243); a body/header mismatch is rejected with `-32020`. Request bodies are capped at the SDK's `DefaultMaxRequestBodyBytes`, over which the server returns `413`.
 - `tools/list` and `server/discover` carry a 5-minute freshness hint (`ttlMs`, SEP-2549) from the `ServerOptions.SetCacheable` policy in `internal/server/cache.go`. The list is fixed for the process lifetime — static tools and generated ones are both registered at startup — so the TTL exists to bound how long a client keeps calling tools a redeploy has removed, not to track in-process change. Scope is `private`, not the SDK's `public` default: the list describes this specific home (script names, areas, device names) and no intermediary should be serving it to anyone else. A request with a cursor is left unhinted, since a page is only meaningful next to its cursor; the hook cannot see the result, so it relies on `PageSize` staying unset (pinned by `TestToolListIsSinglePage`).
@@ -189,7 +190,7 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `get_home_events` | Logbook entries for recent state changes |
 | `call_home_service` | Call HA services (turn_on, turn_off, set_temperature, etc.) |
 | `get_todo_items` | Retrieve items from a todo list entity |
-| `manage_automations` | CRUD operations on automations |
+| `manage_automations` | CRUD operations on automations (`delete` asks for confirmation on capable clients) |
 | `get_automation_traces` | Debug automation execution history via WebSocket |
 | `manage_helpers` | CRUD operations on helpers (input_boolean, input_number, input_text, input_select, input_datetime, input_button, counter, timer, schedule) |
 | `manage_scripts` | CRUD operations on scripts |
@@ -203,7 +204,7 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `render_template` | Evaluate a Jinja2 template against current state for compound queries |
 | `get_long_term_statistics` | Long-term statistics (energy/gas/water/measurement sensors) aggregated by 5minute/hour/day/week/month |
 | `get_calendar_events` | Upcoming events from HA calendar entities (lists calendars when entity_id is omitted) |
-| `manage_dashboards` | List/read/save/delete Lovelace dashboard configs and create/update/delete storage dashboards (save_config overwrites the whole config) |
+| `manage_dashboards` | List/read/save/delete Lovelace dashboard configs and create/update/delete storage dashboards (save_config overwrites the whole config; save_config/delete_config/delete ask for confirmation on capable clients) |
 | `manage_dashboard_resources` | CRUD for Lovelace dashboard resources (custom JS/CSS modules) |
 | `manage_entity_state` | Write or delete an entity's state directly in the state machine (virtual entities; does not control devices) |
 | `fire_home_event` | Fire an event on the event bus (triggers automations listening for it) |
@@ -260,10 +261,10 @@ These are not hand-written. At startup the server queries the instance and gener
 | `list_esphome_devices` | List dashboard devices with config file, address, online state, installed/deployed versions (`full=true` for the raw records) |
 | `list_esphome_secrets` | List shared secrets.yaml key names (never values) |
 | `read_esphome_file` | Read a config-dir file (device YAML, include, secrets.yaml) |
-| `write_esphome_file` | Create/overwrite a config-dir file (push YAML + includes) |
+| `write_esphome_file` | Create/overwrite a config-dir file (push YAML + includes; overwriting asks for confirmation on capable clients) |
 | `validate_esphome` | Validate a config without building (streaming) |
 | `compile_esphome` | Queue a firmware build; returns a `job_id` immediately (async) |
-| `upload_esphome` | Queue an OTA flash of the latest build; returns a `job_id` (async, destructive) |
+| `upload_esphome` | Queue an OTA flash of the latest build; returns a `job_id` (async, destructive, asks for confirmation on capable clients) |
 | `get_esphome_job` | Poll a compile/upload job's status, progress, and output |
 | `download_esphome_binary` | Confirm a built image exists; report size + SHA-256 |
 | `get_esphome_logs` | Capture live device logs for a bounded duration |

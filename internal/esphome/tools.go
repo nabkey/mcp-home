@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -175,6 +176,15 @@ func (t *Tools) registerWriteFile(server *mcp.Server) {
 		if args.Content == "" {
 			return mcputil.Errorf("content is required"), nil, nil
 		}
+		// Creating a file is additive; overwriting one is not. Only the
+		// latter is worth interrupting the user for, so look first. A read
+		// error is treated as "new file": the write is about to hit the same
+		// dashboard and will surface any real problem itself.
+		if existing, err := t.client.ReadConfig(ctx, args.File); err == nil {
+			if ok, res := mcputil.Confirm(req, fmt.Sprintf("Overwrite %s (%d bytes) with new content (%d bytes)", args.File, len(existing), len(args.Content))); !ok {
+				return res, nil, nil
+			}
+		}
 		created, err := t.client.WriteConfig(ctx, args.File, args.Content)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
@@ -244,6 +254,13 @@ func (t *Tools) registerUpload(server *mcp.Server) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args uploadArgs) (*mcp.CallToolResult, any, error) {
 		if err := validate.Identifier("config", args.Config); err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
+		}
+		target := "over the air"
+		if args.Port != "" && !strings.EqualFold(args.Port, "OTA") {
+			target = "via " + args.Port
+		}
+		if ok, res := mcputil.Confirm(req, fmt.Sprintf("Flash %s %s with the latest build", args.Config, target)); !ok {
+			return res, nil, nil
 		}
 		job, err := t.client.Upload(ctx, args.Config, args.Port)
 		if err != nil {
