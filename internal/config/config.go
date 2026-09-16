@@ -24,7 +24,31 @@ type CLI struct {
 	Radarr     RadarrConfig     `embed:"" prefix:"radarr-"  envprefix:"RADARR_"`
 	Frigate    FrigateConfig    `embed:"" prefix:"frigate-" envprefix:"FRIGATE_"`
 	ESPHome    ESPHomeConfig    `embed:"" prefix:"esphome-" envprefix:"ESPHOME_"`
+	Tailscale  TailscaleConfig  `embed:"" prefix:"ts-"      envprefix:"TS_"`
 	Version    kong.VersionFlag `short:"V" help:"Print version and exit."`
+}
+
+// TailscaleConfig holds the optional embedded-Tailscale (tsnet) listener.
+// When AuthKey is set the server joins the tailnet as Hostname and serves
+// /mcp over HTTPS there, authenticating callers by WhoIs identity instead of
+// Cloudflare Access. The Cloudflare Tunnel keeps running alongside.
+type TailscaleConfig struct {
+	AuthKey       string   `env:"AUTHKEY" help:"Tailscale auth key (tagged, reusable). Enables the tsnet listener."`
+	Hostname      string   `env:"HOSTNAME" default:"mcp-home" help:"tsnet node hostname"`
+	StateDir      string   `env:"STATE_DIR" default:"/data/tsstate" help:"tsnet state directory (persist it)"`
+	AllowedLogins []string `env:"ALLOWED_LOGINS" help:"Tailscale logins allowed to call /mcp"`
+	AllowedTags   []string `env:"ALLOWED_TAGS" default:"tag:voice-agent" help:"Tailscale node tags allowed to call /mcp"`
+}
+
+// Enabled reports whether the tsnet listener should run.
+func (t TailscaleConfig) Enabled() bool { return t.AuthKey != "" }
+
+// Validate is called by Kong.
+func (t TailscaleConfig) Validate() error {
+	if t.Enabled() && len(t.AllowedLogins) == 0 && len(t.AllowedTags) == 0 {
+		return fmt.Errorf("TS_ALLOWED_LOGINS or TS_ALLOWED_TAGS must be set when TS_AUTHKEY is set")
+	}
+	return nil
 }
 
 // CloudflareConfig holds required Cloudflare Tunnel settings.

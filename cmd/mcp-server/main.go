@@ -20,6 +20,7 @@ import (
 	"github.com/nabkey/mcp-home/internal/config"
 	"github.com/nabkey/mcp-home/internal/middleware"
 	"github.com/nabkey/mcp-home/internal/server"
+	"github.com/nabkey/mcp-home/internal/tsauth"
 	"github.com/nabkey/mcp-home/internal/tunnel"
 )
 
@@ -140,6 +141,51 @@ func run(cli config.CLI, logger *slog.Logger) error {
 			logger.Error("http server error", "error", err)
 		}
 	}()
+
+	// Optional second front door: the tailnet. Same MCP handler, but the
+	// gate is WhoIs identity rather than a Cloudflare Access JWT, so peers
+	// like the voice agent can call /mcp without OAuth or a static token.
+	if cli.Tailscale.Enabled() {
+		ts, err := tsauth.Start(ctx, tsauth.Config{
+			Hostname: cli.Tailscale.Hostname,
+			AuthKey:  cli.Tailscale.AuthKey,
+			StateDir: cli.Tailscale.StateDir,
+			Logger:   logger,
+		})
+		if err != nil {
+			return fmt.Errorf("tailscale: %w", err)
+		}
+		defer func() { _ = ts.Close() }()
+		tsLn, err := ts.ListenTLS()
+		if err != nil {
+			return fmt.Errorf("tailscale listen: %w", err)
+		}
+		tsMux := http.NewServeMux()
+		tsMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		})
+		tsAuth := ts.Middleware(cli.Tailscale.AllowedLogins, cli.Tailscale.AllowedTags)
+		tsMux.Handle("/mcp", tsAuth(handler))
+		tsMux.Handle("/mcp/sse", tsAuth(handler))
+		tsServer := &http.Server{
+			Handler:           middleware.Logging(logger)(tsMux),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+		go func() {
+			if err := tsServer.Serve(tsLn); err != nil && err != http.ErrServerClosed {
+				logger.Error("tailscale http server error", "error", err)
+			}
+		}()
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			_ = tsServer.Shutdown(shutdownCtx)
+		}()
+		logger.Info("MCP server available on tailnet", "url", "https://"+ts.FQDN+"/mcp",
+			"allowed_logins", cli.Tailscale.AllowedLogins, "allowed_tags", cli.Tailscale.AllowedTags)
+	}
 
 	// Set up the Cloudflare Tunnel.
 	tun, err := tunnel.Setup(ctx, tunnel.Config{

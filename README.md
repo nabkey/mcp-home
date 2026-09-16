@@ -90,6 +90,24 @@ Tags:
 
 The image bundles `cloudflared`, so no runtime download is needed. Build locally with `docker build -t mcp-home .`.
 
+## Tailnet listener (optional)
+
+Set `TS_AUTHKEY` to a tagged, reusable Tailscale auth key and the server also
+joins your tailnet as `mcp-home` (override with `TS_HOSTNAME`) and serves
+`https://mcp-home.<tailnet>.ts.net/mcp` with a Tailscale-issued certificate.
+The Cloudflare Tunnel keeps running; this is a second front door for tailnet
+peers such as the voice agent.
+
+Callers are identified with `WhoIs` on the WireGuard peer, so there is no
+token. Allow them with `TS_ALLOWED_TAGS` (default `tag:voice-agent`) and/or
+`TS_ALLOWED_LOGINS`; at least one must be set. The tailnet ACL must also let
+those peers reach this node on 443, and HTTPS certificates must be enabled in
+the tailnet DNS settings.
+
+tsnet keeps its node key in `TS_STATE_DIR` (default `/data/tsstate`). Mount
+a volume there in Container Station or the node re-registers on every
+restart.
+
 ## Development
 
 The Go toolchain and golangci-lint are managed via [mise](https://mise.jdx.dev) — run `mise install` once, then:
