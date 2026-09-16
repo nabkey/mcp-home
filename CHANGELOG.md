@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/nabkey/mcp-home/compare/v1.11.0...v1.12.0) (2026-09-16)
+
+
+### Features
+
+* adopt go-sdk 1.8.0 and confirm destructive actions via multi round-trip elicitation ([#52](https://github.com/nabkey/mcp-home/issues/52)) ([8aa9d18](https://github.com/nabkey/mcp-home/commit/8aa9d181e90f07a56cf12b68cd1a329855d6c717))
+
 ## [1.11.0](https://github.com/nabkey/mcp-home/compare/v1.10.0...v1.11.0) (2026-09-16)
 
 
