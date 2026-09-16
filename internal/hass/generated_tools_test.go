@@ -18,6 +18,7 @@ type fakeHA struct {
 	// calls records service calls so a test can assert what a generated tool did.
 	lastServicePath string
 	lastServiceBody map[string]any
+	lastIntentBody  map[string]any
 }
 
 func (f *fakeHA) handler(t *testing.T) http.HandlerFunc {
@@ -29,6 +30,8 @@ func (f *fakeHA) handler(t *testing.T) http.HandlerFunc {
 		case r.URL.Path == "/api/services":
 			_, _ = w.Write([]byte(f.services))
 		case r.URL.Path == "/api/intent/handle":
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &f.lastIntentBody)
 			_, _ = w.Write([]byte(`{"speech":{"plain":{"speech":"Done"}},"data":{"success":[{"id":"light.kitchen"}]}}`))
 		case len(r.URL.Path) > len("/api/services/") && r.URL.Path[:len("/api/services/")] == "/api/services/":
 			f.lastServicePath = r.URL.Path
@@ -47,10 +50,16 @@ func (f *fakeHA) handler(t *testing.T) http.HandlerFunc {
 // returns a connected MCP client session.
 func connect(t *testing.T, fake *fakeHA) *mcp.ClientSession {
 	t.Helper()
+	return connectWithDeny(t, fake, nil)
+}
+
+// connectWithDeny is connect with HASS_DENY_SERVICES patterns applied.
+func connectWithDeny(t *testing.T, fake *fakeHA, deny []string) *mcp.ClientSession {
+	t.Helper()
 	srv := httptest.NewServer(fake.handler(t))
 	t.Cleanup(srv.Close)
 
-	tools, err := NewTools(srv.URL, "test-token", nil)
+	tools, err := NewTools(srv.URL, "test-token", deny)
 	if err != nil {
 		t.Fatalf("NewTools: %v", err)
 	}
@@ -107,7 +116,7 @@ func TestRegisterGeneratedSelectsByPresentDomains(t *testing.T) {
 		}
 	}
 	for _, unwanted := range []string{
-		"home_vacuum_start", "home_humidifier_mode", "home_media_pause",
+		"home_vacuum_start", "home_humidifier_mode", "home_media",
 		"home_climate_set_temperature", "home_set_position",
 	} {
 		if _, ok := tools[unwanted]; ok {

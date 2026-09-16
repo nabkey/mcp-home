@@ -53,6 +53,8 @@ All config is via environment variables (or CLI flags). Uses [Kong](https://gith
 
 `LOG_LEVEL` (debug/info/warn/error) controls slog verbosity. Every tool call is audit-logged with the CF Access user via an MCP receiving middleware (`internal/server/audit.go`). All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
 
+Results are budgeted for a model's context, not a screen: `mcputil.JSONResult` emits compact JSON, and the list-shaped tools (`get_home_states`, `get_home_registry`, `list_home_services`, `list_esphome_devices`) return a slim projection by default (`internal/hass/slim.go`) with `attributes=true` / `full=true` / a `domain` for the raw record. Measured on a real instance, an unfiltered state dump was ~93k tokens and the full registry ~420k before this; the same calls are ~33k and ~71k now, and the filtered forms are hundreds. Keep new list tools on the same pattern.
+
 Config struct definitions are in `internal/config/config.go`. Each optional group has `Enabled() bool` and `Validate() error` methods. Kong invokes `Validate()` on each embedded group during `Parse`, so a group enforces its all-or-nothing rule just by defining the method.
 
 ### Prerequisites
@@ -133,6 +135,7 @@ Three deliberate departures from upstream:
 - **Timer intents are excluded.** Upstream gates them on `llm_context.device_id` being a voice satellite that supports timers; a REST caller has no such device, so those intents could never match.
 - **A target is required.** `vol.Any("name", "area", "floor")` in upstream's `DynamicServiceIntentHandler` is a key *matcher*, not a requirement — unmarked voluptuous keys are optional — so HA accepts an untargeted intent and matches every entity in scope. That is a fine voice-assistant default and a poor tool-call one, so the generated schemas require at least one of `name`/`area`/`floor`/`domain`. `domain` counts, so "turn off all the lights" still works.
 - **Intent tools are gated on `HASS_DENY_SERVICES`.** `/api/intent/handle` takes an intent name rather than a service, so `CallService`'s policy check never runs. Each `IntentDef` therefore declares the services it can dispatch (`HassTurnOff` reaches `lock.unlock`, `cover.close_cover`, `valve.close_valve`, `button.press`), and an intent whose services include a denied one is not registered at all. Conservative by design: resolution happens inside HA's handler, so there is no later point at which to check.
+- **Same-domain intents fold into one tool.** An `IntentDef` with `Group`/`Action` instead of `ToolName` becomes one value of an `action` enum on the grouped tool named in `IntentGroups` (today only `home_media`, holding the nine media_player intents). Every targeted intent repeats the same ~800-byte targeting schema, so nine near-identical tools cost the model far more than one with an enum. The merged schema validates types and the target requirement; per-action required slots are checked at call time, only the chosen action's slots are forwarded to HA, and a denied service drops just that action from the enum.
 - **Generated tools validate their own input.** The go-sdk only validates arguments for tools added via the generic `mcp.AddTool`, which derives and resolves a schema from a Go type. Runtime-schema tools go through `Server.AddTool`, which advertises the schema but does not enforce it, so `decodeArgs` resolves and validates against it explicitly. Without this, `home_turn_on` with no `name`/`area`/`floor` would reach Home Assistant instead of being rejected.
 
 ### Service Clients
@@ -163,7 +166,7 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 
 | Tool | Description |
 |------|-------------|
-| `get_home_states` | Query entity states, optionally filtered by domain |
+| `get_home_states` | Query entity states filtered by `domain`, `entity_id` or `search`; compact (id, state, name, unit) unless `attributes=true` |
 | `get_home_events` | Logbook entries for recent state changes |
 | `call_home_service` | Call HA services (turn_on, turn_off, set_temperature, etc.) |
 | `get_todo_items` | Retrieve items from a todo list entity |
@@ -172,11 +175,11 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `manage_helpers` | CRUD operations on helpers (input_boolean, input_number, input_text, input_select, input_datetime, input_button, counter, timer, schedule) |
 | `manage_scripts` | CRUD operations on scripts |
 | `manage_scenes` | CRUD plus `activate` for scenes |
-| `get_home_registry` | Topology data (areas, devices, entities, labels, floors); `kind=all` returns the full registry in one call |
+| `get_home_registry` | Topology data (areas, devices, entities, labels, floors); compact projection with entities inheriting their device's area, filterable by `area_id`/`domain`, `full=true` for raw records |
 | `manage_registry` | Create/update/delete area/entity/device/label/floor registry entries (assign areas, rename, label) |
 | `execute_script` | Run an ad-hoc action sequence (HA script syntax) without storing a script |
 | `get_diagnostics` | Health/error diagnostics: error log, system health, repair issues, persistent notifications (`kind=all` by default) |
-| `list_home_services` | Discover available services with their fields and target selectors before calling them |
+| `list_home_services` | Discover services before calling them: names-only index of all domains, or full field schemas for one `domain` (and optionally one `service`) |
 | `get_state_history` | Time-series state history for entities (numeric trends, on/off timelines) |
 | `render_template` | Evaluate a Jinja2 template against current state for compound queries |
 | `get_long_term_statistics` | Long-term statistics (energy/gas/water/measurement sensors) aggregated by 5minute/hour/day/week/month |
@@ -198,10 +201,7 @@ These are not hand-written. At startup the server queries the instance and gener
 | `home_light_set` | Set a light's brightness percentage, color name, or color temperature |
 | `home_climate_set_temperature` | Set a thermostat's target temperature |
 | `home_fan_set_speed` | Set a fan's speed percentage |
-| `home_media_pause` / `_unpause` / `_next` / `_previous` | Media player transport control |
-| `home_set_volume` / `home_set_volume_relative` | Set absolute or relative media player volume |
-| `home_media_player_mute` / `_unmute` | Mute or unmute a media player |
-| `home_media_search_and_play` | Search for media and play the first result |
+| `home_media` | One tool for the nine media_player intents, selected by `action`: pause, unpause, next, previous, set_volume, set_volume_relative, mute, unmute, search_and_play |
 | `home_vacuum_start` / `_return_to_base` / `_clean_area` | Vacuum control |
 | `home_humidifier_setpoint` / `home_humidifier_mode` | Humidifier target humidity and mode |
 | `home_list_add_item` / `_complete_item` / `_remove_item` | To-do and shopping list items |
@@ -238,7 +238,7 @@ These are not hand-written. At startup the server queries the instance and gener
 
 | Tool | Description |
 |------|-------------|
-| `list_esphome_devices` | List dashboard devices with config file, address, online status, versions |
+| `list_esphome_devices` | List dashboard devices with config file, address, online state, installed/deployed versions (`full=true` for the raw records) |
 | `list_esphome_secrets` | List shared secrets.yaml key names (never values) |
 | `read_esphome_file` | Read a config-dir file (device YAML, include, secrets.yaml) |
 | `write_esphome_file` | Create/overwrite a config-dir file (push YAML + includes) |

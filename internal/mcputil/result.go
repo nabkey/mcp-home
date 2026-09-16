@@ -17,9 +17,11 @@ func TextResult(text string) *mcp.CallToolResult {
 	}
 }
 
-// JSONResult marshals v as indented JSON and returns it as an MCP text content result.
+// JSONResult marshals v as compact JSON and returns it as an MCP text content
+// result. Compact, not indented: the text lands in a model's context, where
+// indentation is a quarter of the bytes of a large payload and carries nothing.
 func JSONResult(v any) (*mcp.CallToolResult, any, error) {
-	b, err := json.MarshalIndent(v, "", "  ")
+	b, err := json.Marshal(v)
 	if err != nil {
 		return Errorf("marshaling result: %v", err), nil, nil
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
 )
@@ -36,10 +37,19 @@ type IntentSlot struct {
 	Required    bool
 }
 
-// IntentDef describes an intent exposed as an MCP tool.
+// IntentDef describes an intent exposed as an MCP tool, either on its own
+// (ToolName) or as one action of a grouped tool (Group + Action).
 type IntentDef struct {
-	// ToolName is the MCP tool name.
+	// ToolName is the MCP tool name. Empty for a grouped intent.
 	ToolName string
+	// Group names the grouped tool this intent is an action of, and Action
+	// its value in that tool's action enum. Several intents that share
+	// targeting and act on one domain (the media_player transport verbs)
+	// fold into one tool this way: each intent tool repeats the same
+	// targeting schema, which is most of its size, so nine near-identical
+	// tools cost the model far more context than one with an enum.
+	Group  string
+	Action string
 	// Intent is the Home Assistant intent type (e.g. HassTurnOn).
 	Intent string
 	// Description is the tool description, taken from upstream's handler.
@@ -60,6 +70,39 @@ type IntentDef struct {
 	Services []string
 	// Destructive marks intents that change state in a hard-to-reverse way.
 	Destructive bool
+}
+
+// Name identifies the intent in logs: the tool name, or group.action.
+func (d IntentDef) Name() string {
+	if d.Group != "" {
+		return d.Group + "." + d.Action
+	}
+	return d.ToolName
+}
+
+// IntentGroup describes a grouped tool. Its members are the IntentCatalog
+// entries whose Group matches; their domains and services are unioned.
+type IntentGroup struct {
+	Description string
+}
+
+// IntentGroups is keyed by the grouped tool name.
+var IntentGroups = map[string]IntentGroup{
+	"home_media": {
+		Description: "Controls a media player: transport, volume, mute, or search-and-play. Pick an action and target the player by name, area or floor.",
+	},
+}
+
+// groupMembers returns the catalog entries that fold into group, in catalog
+// order.
+func groupMembers(group string) []IntentDef {
+	var out []IntentDef
+	for _, d := range IntentCatalog {
+		if d.Group == group {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func strSchema(desc string) *jsonschema.Schema {
@@ -168,7 +211,8 @@ var IntentCatalog = []IntentDef{
 		},
 	},
 	{
-		ToolName:    "home_media_pause",
+		Group:       "home_media",
+		Action:      "pause",
 		Intent:      "HassMediaPause",
 		Services:    []string{"media_player.media_pause"},
 		Description: "Pauses a media player.",
@@ -176,7 +220,8 @@ var IntentCatalog = []IntentDef{
 		Targeted:    true,
 	},
 	{
-		ToolName:    "home_media_unpause",
+		Group:       "home_media",
+		Action:      "unpause",
 		Intent:      "HassMediaUnpause",
 		Services:    []string{"media_player.media_play"},
 		Description: "Resumes a paused media player.",
@@ -184,7 +229,8 @@ var IntentCatalog = []IntentDef{
 		Targeted:    true,
 	},
 	{
-		ToolName:    "home_media_next",
+		Group:       "home_media",
+		Action:      "next",
 		Intent:      "HassMediaNext",
 		Services:    []string{"media_player.media_next_track"},
 		Description: "Skips a media player to the next item.",
@@ -192,7 +238,8 @@ var IntentCatalog = []IntentDef{
 		Targeted:    true,
 	},
 	{
-		ToolName:    "home_media_previous",
+		Group:       "home_media",
+		Action:      "previous",
 		Intent:      "HassMediaPrevious",
 		Services:    []string{"media_player.media_previous_track"},
 		Description: "Replays the previous item on a media player.",
@@ -200,7 +247,8 @@ var IntentCatalog = []IntentDef{
 		Targeted:    true,
 	},
 	{
-		ToolName:    "home_set_volume",
+		Group:       "home_media",
+		Action:      "set_volume",
 		Intent:      "HassSetVolume",
 		Services:    []string{"media_player.volume_set"},
 		Description: "Sets the volume percentage of a media player.",
@@ -211,7 +259,8 @@ var IntentCatalog = []IntentDef{
 		},
 	},
 	{
-		ToolName:    "home_set_volume_relative",
+		Group:       "home_media",
+		Action:      "set_volume_relative",
 		Intent:      "HassSetVolumeRelative",
 		Services:    []string{"media_player.volume_set"},
 		Description: "Increases or decreases the volume of a media player.",
@@ -232,7 +281,8 @@ var IntentCatalog = []IntentDef{
 		},
 	},
 	{
-		ToolName:    "home_media_player_mute",
+		Group:       "home_media",
+		Action:      "mute",
 		Intent:      "HassMediaPlayerMute",
 		Services:    []string{"media_player.volume_mute"},
 		Description: "Mutes a media player.",
@@ -240,7 +290,8 @@ var IntentCatalog = []IntentDef{
 		Targeted:    true,
 	},
 	{
-		ToolName:    "home_media_player_unmute",
+		Group:       "home_media",
+		Action:      "unmute",
 		Intent:      "HassMediaPlayerUnmute",
 		Services:    []string{"media_player.volume_mute"},
 		Description: "Unmutes a media player.",
@@ -248,7 +299,8 @@ var IntentCatalog = []IntentDef{
 		Targeted:    true,
 	},
 	{
-		ToolName:    "home_media_search_and_play",
+		Group:       "home_media",
+		Action:      "search_and_play",
 		Intent:      "HassMediaSearchAndPlay",
 		Services:    []string{"media_player.play_media"},
 		Description: "Searches for media and plays the first result on a media player.",
@@ -357,64 +409,127 @@ func deviceClassSlot(classes []string) []IntentSlot {
 	}}
 }
 
+// targetSchema adds the standard name/area/floor/domain targeting slots to
+// props and returns the anyOf that requires at least one of them.
+//
+// Requiring a target is deliberately stricter than upstream:
+// vol.Any("name", "area", "floor") in DynamicServiceIntentHandler is a *key
+// matcher*, not a requirement, and unmarked voluptuous keys are optional, so
+// Home Assistant accepts an intent with no target at all and matches every
+// entity in scope. For a voice assistant that is a reasonable "turn off the
+// lights" default; for a tool call it means one under-specified argument
+// list can act on the whole house.
+//
+// "domain" counts as a target, so a deliberate broad command still works
+// (domain: ["light"] to turn off every light) while a call carrying no
+// targeting information at all is rejected.
+func targetSchema(props map[string]*jsonschema.Schema) []*jsonschema.Schema {
+	// Every targeted intent repeats these four properties, so their
+	// descriptions are kept terse: a few bytes here is a few hundred
+	// tokens across the tool list.
+	props["name"] = strSchema("Entity friendly name or alias, e.g. \"kitchen sink light\".")
+	props["area"] = strSchema("Area name, e.g. \"kitchen\"; targets everything in it.")
+	props["floor"] = strSchema("Floor name, e.g. \"upstairs\".")
+	props["domain"] = &jsonschema.Schema{
+		Type:        "array",
+		Description: "Domains, e.g. [\"light\"]; narrows the other targets, or alone means every entity in those domains.",
+		Items:       &jsonschema.Schema{Type: "string"},
+	}
+	return []*jsonschema.Schema{
+		{Required: []string{"name"}},
+		{Required: []string{"area"}},
+		{Required: []string{"floor"}},
+		{Required: []string{"domain"}},
+	}
+}
+
+// slotSchema is the JSON Schema for one slot, with the slot's description
+// applied when the schema carries none of its own.
+func slotSchema(slot IntentSlot) *jsonschema.Schema {
+	s := slot.Schema
+	if s == nil {
+		return strSchema(slot.Description)
+	}
+	if slot.Description != "" && s.Description == "" {
+		c := *s
+		c.Description = slot.Description
+		return &c
+	}
+	return s
+}
+
 // InputSchema builds the JSON Schema for an intent's arguments.
 func (d IntentDef) InputSchema() *jsonschema.Schema {
 	props := map[string]*jsonschema.Schema{}
 	var required []string
 
+	schema := &jsonschema.Schema{Type: "object", Properties: props}
 	if d.Targeted {
-		props["name"] = strSchema("Name of a specific entity to target, e.g. \"kitchen sink light\". Resolved by Home Assistant against friendly names and aliases.")
-		props["area"] = strSchema("Name of an area to target, e.g. \"kitchen\". Targets every matching entity in the area.")
-		props["floor"] = strSchema("Name of a floor to target, e.g. \"upstairs\".")
-		props["domain"] = &jsonschema.Schema{
-			Type:        "array",
-			Description: "Entity domains to target, e.g. [\"light\"]. Narrows a name/area/floor target, or on its own targets every entity in those domains (\"turn off all the lights\").",
-			Items:       &jsonschema.Schema{Type: "string"},
-		}
+		schema.AnyOf = targetSchema(props)
 	}
 
 	for _, slot := range d.Slots {
-		s := slot.Schema
-		if s == nil {
-			s = strSchema(slot.Description)
-		} else if slot.Description != "" && s.Description == "" {
-			c := *s
-			c.Description = slot.Description
-			s = &c
-		}
-		props[slot.Name] = s
+		props[slot.Name] = slotSchema(slot)
 		if slot.Required {
 			required = append(required, slot.Name)
 		}
 	}
 	sort.Strings(required)
+	schema.Required = required
+	return schema
+}
 
-	schema := &jsonschema.Schema{
-		Type:       "object",
-		Properties: props,
-		Required:   required,
-	}
+// groupInputSchema builds the JSON Schema for a grouped tool: an action enum
+// whose description lists each action, the targeting slots if any member is
+// targeted, and the union of the members' slots, each marked with the
+// actions that use it. Per-action required slots cannot be expressed here
+// without a large oneOf, so they are checked at call time instead.
+func groupInputSchema(members []IntentDef) *jsonschema.Schema {
+	props := map[string]*jsonschema.Schema{}
+	schema := &jsonschema.Schema{Type: "object", Properties: props, Required: []string{"action"}}
 
-	// Require at least one targeting slot. This is deliberately stricter than
-	// upstream: vol.Any("name", "area", "floor") in DynamicServiceIntentHandler
-	// is a *key matcher*, not a requirement, and unmarked voluptuous keys are
-	// optional, so Home Assistant accepts an intent with no target at all and
-	// matches every entity in scope. For a voice assistant that is a
-	// reasonable "turn off the lights" default; for a tool call it means one
-	// under-specified argument list can act on the whole house.
-	//
-	// "domain" counts as a target, so a deliberate broad command still works
-	// (domain: ["light"] to turn off every light) while a call carrying no
-	// targeting information at all is rejected.
-	if d.Targeted {
-		schema.AnyOf = []*jsonschema.Schema{
-			{Required: []string{"name"}},
-			{Required: []string{"area"}},
-			{Required: []string{"floor"}},
-			{Required: []string{"domain"}},
+	actions := make([]any, 0, len(members))
+	desc := "One of:"
+	targeted := false
+	slotUsers := map[string][]string{}
+	for _, m := range members {
+		actions = append(actions, m.Action)
+		desc += " " + m.Action + " (" + strings.TrimSuffix(m.Description, ".") + ");"
+		targeted = targeted || m.Targeted
+		for _, slot := range m.Slots {
+			if _, ok := props[slot.Name]; !ok {
+				props[slot.Name] = slotSchema(slot)
+			}
+			slotUsers[slot.Name] = append(slotUsers[slot.Name], m.Action)
 		}
 	}
+	props["action"] = &jsonschema.Schema{Type: "string", Enum: actions, Description: strings.TrimSuffix(desc, ";") + "."}
+	for name, users := range slotUsers {
+		c := *props[name]
+		suffix := " (" + strings.Join(users, ", ") + ")"
+		if required := requiredBy(members, name); len(required) > 0 {
+			suffix = " (required by " + strings.Join(required, ", ") + ")"
+		}
+		c.Description = strings.TrimSuffix(c.Description, ".") + suffix + "."
+		props[name] = &c
+	}
+	if targeted {
+		schema.AnyOf = targetSchema(props)
+	}
 	return schema
+}
+
+// requiredBy lists the actions for which slot is required.
+func requiredBy(members []IntentDef, slot string) []string {
+	var out []string
+	for _, m := range members {
+		for _, s := range m.Slots {
+			if s.Name == slot && s.Required {
+				out = append(out, m.Action)
+			}
+		}
+	}
+	return out
 }
 
 // IntentResult is the useful part of an intent response. IntentResponse.as_dict
