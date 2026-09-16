@@ -15,7 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"tailscale.com/client/local"
+	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tsnet"
 )
 
@@ -53,10 +55,16 @@ type Config struct {
 	Logger   *slog.Logger
 }
 
+// whoIsFunc resolves a remote address to its tailnet peer. It is the one
+// tsnet call the middleware makes, split out so tests can supply identities
+// without a tailnet.
+type whoIsFunc func(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
+
 // Server wraps a running tsnet node.
 type Server struct {
 	ts     *tsnet.Server
 	lc     *local.Client
+	whoIs  whoIsFunc
 	logger *slog.Logger
 	// FQDN is the node's MagicDNS name, e.g. voice.tailnet.ts.net.
 	FQDN string
@@ -86,7 +94,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 		_ = ts.Close()
 		return nil, fmt.Errorf("tsnet local client: %w", err)
 	}
-	s := &Server{ts: ts, lc: lc, logger: cfg.Logger}
+	s := &Server{ts: ts, lc: lc, whoIs: lc.WhoIs, logger: cfg.Logger}
 	if len(st.CertDomains) > 0 {
 		s.FQDN = st.CertDomains[0]
 	} else if st.Self != nil {
@@ -117,35 +125,80 @@ func (s *Server) Close() error { return s.ts.Close() }
 // allowedLogins / allowedTags: if both are empty, any tailnet peer the ACL
 // admits is accepted (the ACL is the gate). Otherwise the caller must match
 // one login or carry one tag.
+//
+// An admitted caller is then passed through the go-sdk's RequireBearerToken
+// so the identity is recorded as auth.TokenInfo. That is the only way to set
+// it — the context key is unexported — and it is what the streamable
+// transport and the audit middleware read for the user, so without this
+// every tailnet call would be logged as "anonymous". Whatever Authorization
+// header the client sent is irrelevant here (WhoIs already authenticated the
+// peer) and is replaced with a placeholder so the SDK's header parse passes.
 func (s *Server) Middleware(allowedLogins, allowedTags []string) func(http.Handler) http.Handler {
+	record := auth.RequireBearerToken(identityVerifier, &auth.RequireBearerTokenOptions{
+		// The peer's identity lasts as long as the WireGuard session; there
+		// is no token expiry to check.
+		AllowMissingExpiration: true,
+	})
 	return func(next http.Handler) http.Handler {
+		recorded := record(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			who, err := s.lc.WhoIs(r.Context(), r.RemoteAddr)
+			who, err := s.whoIs(r.Context(), r.RemoteAddr)
 			if err != nil {
 				s.logger.Warn("whois failed", "remote", r.RemoteAddr, "error", err)
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			id := Identity{
-				Node:    strings.TrimSuffix(strings.SplitN(who.Node.Name, ".", 2)[0], "."),
-				LoginIP: r.RemoteAddr,
-			}
-			if who.UserProfile != nil {
-				id.Login = who.UserProfile.LoginName
-				id.Name = who.UserProfile.DisplayName
-			}
-			if who.Node.IsTagged() {
-				id.IsTagged = true
-				id.Tags = who.Node.Tags
-			}
+			id := identityFrom(who, r.RemoteAddr)
 			if !allowed(id, allowedLogins, allowedTags) {
 				s.logger.Warn("denied", "who", id.String(), "path", r.URL.Path)
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, id)))
+			r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, id))
+			r.Header.Set("Authorization", "Bearer "+placeholderToken)
+			recorded.ServeHTTP(w, r)
 		})
 	}
+}
+
+// placeholderToken stands in for a bearer token on tailnet requests. It
+// carries no secret: identityVerifier ignores it and reads the WhoIs identity
+// from the context instead.
+const placeholderToken = "tailnet-whois"
+
+// identityVerifier is the auth.TokenVerifier for tailnet callers. The
+// "token" is the placeholder set by Middleware; the identity comes from the
+// context it stored there.
+func identityVerifier(ctx context.Context, _ string, _ *http.Request) (*auth.TokenInfo, error) {
+	id, ok := FromContext(ctx)
+	if !ok {
+		return nil, fmt.Errorf("%w: no tailnet identity in context", auth.ErrInvalidToken)
+	}
+	return &auth.TokenInfo{
+		UserID: id.String(),
+		Extra: map[string]any{
+			"login": id.Login,
+			"node":  id.Node,
+			"tags":  id.Tags,
+		},
+	}, nil
+}
+
+// identityFrom builds an Identity from a WhoIs response.
+func identityFrom(who *apitype.WhoIsResponse, remoteAddr string) Identity {
+	id := Identity{LoginIP: remoteAddr}
+	if who.Node != nil {
+		id.Node = strings.TrimSuffix(strings.SplitN(who.Node.Name, ".", 2)[0], ".")
+		if who.Node.IsTagged() {
+			id.IsTagged = true
+			id.Tags = who.Node.Tags
+		}
+	}
+	if who.UserProfile != nil {
+		id.Login = who.UserProfile.LoginName
+		id.Name = who.UserProfile.DisplayName
+	}
+	return id
 }
 
 func allowed(id Identity, logins, tags []string) bool {

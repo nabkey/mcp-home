@@ -1,4 +1,5 @@
-// Command mcp-server runs the MCP server over HTTP behind a Cloudflare Tunnel.
+// Command mcp-server runs the MCP server over HTTP behind a Cloudflare Tunnel
+// and/or on a tailnet via an embedded Tailscale node.
 package main
 
 import (
@@ -22,6 +23,7 @@ import (
 	"github.com/nabkey/mcp-home/internal/server"
 	"github.com/nabkey/mcp-home/internal/tsauth"
 	"github.com/nabkey/mcp-home/internal/tunnel"
+	"golang.org/x/sync/errgroup"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -31,7 +33,7 @@ func main() {
 	var cli config.CLI
 	kong.Parse(&cli,
 		kong.Name("mcp-server"),
-		kong.Description("MCP server for smart home and media management, served via Cloudflare Tunnel."),
+		kong.Description("MCP server for smart home and media management, served via Cloudflare Tunnel and/or Tailscale."),
 		kong.Vars{"version": version},
 	)
 
@@ -51,26 +53,69 @@ func run(cli config.CLI, logger *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Start HTTP server on a random localhost port.
+	srv := server.New(ctx, cli, version, logger)
+	handler := server.NewHTTPHandler(srv, logger)
+
+	// Each front door runs in the group; the first to fail (or the signal
+	// context) takes the rest down. Config validation guarantees at least
+	// one is enabled.
+	g, gctx := errgroup.WithContext(ctx)
+
+	if cli.Cloudflare.Enabled() {
+		if err := serveCloudflare(gctx, g, cli, handler, logger); err != nil {
+			return err
+		}
+	}
+	if cli.Tailscale.Enabled() {
+		if err := serveTailnet(gctx, g, cli, handler, logger); err != nil {
+			return err
+		}
+	}
+	return g.Wait()
+}
+
+// healthHandler answers /health on every listener. It is unauthenticated on
+// purpose: it reveals nothing and lets the tunnel and tailnet probe liveness.
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
+// serveHTTP runs srv on ln in the group and shuts it down when ctx ends.
+func serveHTTP(ctx context.Context, g *errgroup.Group, srv *http.Server, ln net.Listener, name string) {
+	g.Go(func() error {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("%s http server: %w", name, err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = srv.Shutdown(shutdownCtx)
+		return nil
+	})
+}
+
+// serveCloudflare binds a localhost listener, gates /mcp with Cloudflare
+// Access JWT validation (unless --insecure), and runs the tunnel that
+// publishes it. cloudflared is the long-running piece: it stays in the group
+// until the context ends or it exits on its own.
+func serveCloudflare(ctx context.Context, g *errgroup.Group, cli config.CLI, handler http.Handler, logger *slog.Logger) error {
+	// Random localhost port: only cloudflared, on this host, needs to reach it.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	addr := listener.Addr().String()
-
 	logger.Info("starting MCP HTTP server", "addr", addr)
 
-	srv := server.New(ctx, cli, version, logger)
-	handler := server.NewHTTPHandler(srv, logger)
-
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	mux.HandleFunc("/health", healthHandler)
 
 	if cli.Insecure {
-		logger.Warn("INSECURE MODE: OAuth Bearer token validation disabled — MCP endpoints are unauthenticated")
+		logger.Warn("INSECURE MODE: OAuth Bearer token validation disabled — tunnel MCP endpoints are unauthenticated")
 		mux.Handle("/mcp", handler)
 		mux.Handle("/mcp/sse", handler)
 	} else {
@@ -128,64 +173,11 @@ func run(cli config.CLI, logger *slog.Logger) error {
 		)
 	}
 
-	// Wrap with request logging.
-	root := middleware.Logging(logger)(mux)
-
-	httpServer := &http.Server{
-		Handler:           root,
+	serveHTTP(ctx, g, &http.Server{
+		Handler:           middleware.Logging(logger)(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
-	}
-	go func() {
-		if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
-			logger.Error("http server error", "error", err)
-		}
-	}()
-
-	// Optional second front door: the tailnet. Same MCP handler, but the
-	// gate is WhoIs identity rather than a Cloudflare Access JWT, so peers
-	// like the voice agent can call /mcp without OAuth or a static token.
-	if cli.Tailscale.Enabled() {
-		ts, err := tsauth.Start(ctx, tsauth.Config{
-			Hostname: cli.Tailscale.Hostname,
-			AuthKey:  cli.Tailscale.AuthKey,
-			StateDir: cli.Tailscale.StateDir,
-			Logger:   logger,
-		})
-		if err != nil {
-			return fmt.Errorf("tailscale: %w", err)
-		}
-		defer func() { _ = ts.Close() }()
-		tsLn, err := ts.ListenTLS()
-		if err != nil {
-			return fmt.Errorf("tailscale listen: %w", err)
-		}
-		tsMux := http.NewServeMux()
-		tsMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		})
-		tsAuth := ts.Middleware(cli.Tailscale.AllowedLogins, cli.Tailscale.AllowedTags)
-		tsMux.Handle("/mcp", tsAuth(handler))
-		tsMux.Handle("/mcp/sse", tsAuth(handler))
-		tsServer := &http.Server{
-			Handler:           middleware.Logging(logger)(tsMux),
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       120 * time.Second,
-		}
-		go func() {
-			if err := tsServer.Serve(tsLn); err != nil && err != http.ErrServerClosed {
-				logger.Error("tailscale http server error", "error", err)
-			}
-		}()
-		defer func() {
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer shutdownCancel()
-			_ = tsServer.Shutdown(shutdownCtx)
-		}()
-		logger.Info("MCP server available on tailnet", "url", "https://"+ts.FQDN+"/mcp",
-			"allowed_logins", cli.Tailscale.AllowedLogins, "allowed_tags", cli.Tailscale.AllowedTags)
-	}
+	}, listener, "tunnel")
 
 	// Set up the Cloudflare Tunnel.
 	tun, err := tunnel.Setup(ctx, tunnel.Config{
@@ -200,18 +192,61 @@ func run(cli config.CLI, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("tunnel setup: %w", err)
 	}
-
 	logger.Info("MCP server available", "url", "https://"+cli.Cloudflare.Hostname+"/mcp")
 
-	defer func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		_ = httpServer.Shutdown(shutdownCtx)
-	}()
+	// Run cloudflared — blocks until the context is cancelled or it exits.
+	// A clean exit while the context is still live means the tunnel is gone
+	// with nobody having asked; surface it so the group shuts down rather
+	// than serving a listener nothing can reach.
+	g.Go(func() error {
+		if err := tun.Run(ctx); err != nil {
+			return fmt.Errorf("tunnel run: %w", err)
+		}
+		if ctx.Err() == nil {
+			return fmt.Errorf("tunnel run: cloudflared exited")
+		}
+		return nil
+	})
+	return nil
+}
 
-	// Run cloudflared — blocks until context is cancelled.
-	if err := tun.Run(ctx); err != nil {
-		return fmt.Errorf("tunnel run: %w", err)
+// serveTailnet joins the tailnet as an embedded node and serves the same
+// MCP handler there. The gate is WhoIs identity rather than a Cloudflare
+// Access JWT, so peers like the voice agent can call /mcp without OAuth or
+// a static token. --insecure does not apply here.
+func serveTailnet(ctx context.Context, g *errgroup.Group, cli config.CLI, handler http.Handler, logger *slog.Logger) error {
+	ts, err := tsauth.Start(ctx, tsauth.Config{
+		Hostname: cli.Tailscale.Hostname,
+		AuthKey:  cli.Tailscale.AuthKey,
+		StateDir: cli.Tailscale.StateDir,
+		Logger:   logger,
+	})
+	if err != nil {
+		return fmt.Errorf("tailscale: %w", err)
 	}
+	ln, err := ts.ListenTLS()
+	if err != nil {
+		_ = ts.Close()
+		return fmt.Errorf("tailscale listen: %w", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthHandler)
+	gate := ts.Middleware(cli.Tailscale.AllowedLogins, cli.Tailscale.AllowedTags)
+	mux.Handle("/mcp", gate(handler))
+	mux.Handle("/mcp/sse", gate(handler))
+
+	serveHTTP(ctx, g, &http.Server{
+		Handler:           middleware.Logging(logger)(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}, ln, "tailnet")
+	g.Go(func() error {
+		<-ctx.Done()
+		return ts.Close()
+	})
+
+	logger.Info("MCP server available on tailnet", "url", "https://"+ts.FQDN+"/mcp",
+		"allowed_logins", cli.Tailscale.AllowedLogins, "allowed_tags", cli.Tailscale.AllowedTags)
 	return nil
 }

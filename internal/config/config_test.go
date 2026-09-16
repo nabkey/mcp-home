@@ -65,6 +65,7 @@ func TestEnabled(t *testing.T) {
 // environment the whole environment.
 var cliEnv = []string{
 	"CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_ZONE_ID", "CF_HOSTNAME", "CF_TUNNEL_NAME",
+	"TS_AUTHKEY", "TS_HOSTNAME", "TS_STATE_DIR", "TS_ALLOWED_TAGS", "TS_ALLOWED_LOGINS",
 	"INSECURE", "LOG_LEVEL",
 	"HASS_URL", "HASS_TOKEN", "HASS_DENY_SERVICES",
 	"SONARR_URL", "SONARR_API_KEY",
@@ -104,8 +105,8 @@ func parse(t *testing.T) error {
 	return err
 }
 
-// setCloudflare sets the four required Cloudflare variables so that parsing
-// fails only on whatever the test is actually exercising.
+// setCloudflare sets the four Cloudflare variables so that parsing fails only
+// on whatever the test is actually exercising.
 func setCloudflare(t *testing.T) {
 	t.Helper()
 	clearEnv(t)
@@ -139,5 +140,99 @@ func TestParseAcceptsCompleteGroups(t *testing.T) {
 
 	if err := parse(t); err != nil {
 		t.Errorf("parse() = %v, want nil", err)
+	}
+}
+
+func TestCloudflareConfigValidate(t *testing.T) {
+	full := CloudflareConfig{APIToken: "t", AccountID: "a", ZoneID: "z", Hostname: "h"}
+	if err := full.Validate(); err != nil {
+		t.Errorf("full config: %v", err)
+	}
+	if !full.Enabled() {
+		t.Error("full config should be enabled")
+	}
+	if err := (CloudflareConfig{}).Validate(); err != nil {
+		t.Errorf("empty config: %v", err)
+	}
+	if (CloudflareConfig{}).Enabled() {
+		t.Error("empty config should not be enabled")
+	}
+	err := CloudflareConfig{APIToken: "t", Hostname: "h"}.Validate()
+	if err == nil {
+		t.Fatal("expected error for partial Cloudflare config")
+	}
+	if !strings.Contains(err.Error(), "CF_ACCOUNT_ID") || !strings.Contains(err.Error(), "CF_ZONE_ID") {
+		t.Errorf("error should name the missing variables, got: %v", err)
+	}
+	if (CloudflareConfig{APIToken: "t", Hostname: "h"}).Enabled() {
+		t.Error("partial config should not be enabled")
+	}
+}
+
+// With no CF_* and no TS_AUTHKEY the server would have no listener anyone
+// could reach, so the root Validate must fail the parse.
+func TestParseRequiresAFrontDoor(t *testing.T) {
+	clearEnv(t)
+	err := parse(t)
+	if err == nil {
+		t.Fatal("expected parse to fail with no front door configured")
+	}
+	if !strings.Contains(err.Error(), "CF_API_TOKEN") || !strings.Contains(err.Error(), "TS_AUTHKEY") {
+		t.Errorf("error should point at both options, got: %v", err)
+	}
+}
+
+// --insecure only relaxes the Cloudflare listener; on its own it configures
+// nothing, so it must not satisfy the front-door requirement.
+func TestParseInsecureAloneIsNotAFrontDoor(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("INSECURE", "true")
+	if err := parse(t); err == nil {
+		t.Fatal("expected parse to fail: --insecure without any listener")
+	}
+}
+
+func TestParseAcceptsTailnetOnly(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+	if err := parse(t); err != nil {
+		t.Errorf("parse() = %v, want nil (tailnet with default TS_ALLOWED_TAGS)", err)
+	}
+}
+
+func TestParseAcceptsCloudflareOnly(t *testing.T) {
+	setCloudflare(t)
+	if err := parse(t); err != nil {
+		t.Errorf("parse() = %v, want nil", err)
+	}
+}
+
+func TestParseAcceptsBothFrontDoors(t *testing.T) {
+	setCloudflare(t)
+	t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+	if err := parse(t); err != nil {
+		t.Errorf("parse() = %v, want nil", err)
+	}
+}
+
+func TestParseRejectsPartialCloudflare(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+	t.Setenv("CF_API_TOKEN", "token")
+	err := parse(t)
+	if err == nil {
+		t.Fatal("expected parse to reject partially configured Cloudflare")
+	}
+	if !strings.Contains(err.Error(), "CF_HOSTNAME") {
+		t.Errorf("error should name a missing variable, got: %v", err)
+	}
+}
+
+func TestParseRejectsTailnetWithoutAllowlist(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+	t.Setenv("TS_ALLOWED_TAGS", "")
+	if err := parse(t); err == nil {
+		t.Fatal("expected parse to reject TS_AUTHKEY with an empty allowlist")
 	}
 }

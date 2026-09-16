@@ -8,6 +8,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	golang.org/x/sync v0.23.0
 	tailscale.com v1.102.4
 )
 
@@ -54,7 +55,6 @@ require (
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.40.0 // indirect

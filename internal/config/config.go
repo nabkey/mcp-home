@@ -15,9 +15,13 @@ import (
 // fields as of v1.16.0), so an optional group enforces its own all-or-nothing
 // rule just by defining the method. There is deliberately no AfterApply hook
 // here dispatching to them by hand.
+//
+// At least one front door must be configured: the Cloudflare Tunnel
+// (CF_*) or the tailnet listener (TS_*). Both may run at once. The root
+// Validate enforces that, since no single group can.
 type CLI struct {
 	Cloudflare CloudflareConfig `embed:"" prefix:"cf-"      envprefix:"CF_"`
-	Insecure   bool             `env:"INSECURE" default:"false" help:"Skip Cloudflare Access JWT validation (DANGEROUS: exposes server without auth)"`
+	Insecure   bool             `env:"INSECURE" default:"false" help:"Skip Cloudflare Access JWT validation on the tunnel listener (DANGEROUS: exposes server without auth). Has no effect on the tailnet listener."`
 	LogLevel   string           `env:"LOG_LEVEL" default:"info" enum:"debug,info,warn,error" help:"Log level (debug, info, warn, error)"`
 	Hass       HassConfig       `embed:"" prefix:"hass-"    envprefix:"HASS_"`
 	Sonarr     SonarrConfig     `embed:"" prefix:"sonarr-"  envprefix:"SONARR_"`
@@ -28,10 +32,20 @@ type CLI struct {
 	Version    kong.VersionFlag `short:"V" help:"Print version and exit."`
 }
 
+// Validate is called by Kong on the root struct. A server with no front door
+// would start, register its tools, and be reachable by nobody, so that is a
+// configuration error rather than a silent no-op.
+func (c CLI) Validate() error {
+	if !c.Cloudflare.Enabled() && !c.Tailscale.Enabled() {
+		return fmt.Errorf("no front door configured: set CF_API_TOKEN, CF_ACCOUNT_ID, CF_ZONE_ID and CF_HOSTNAME for the Cloudflare Tunnel, or TS_AUTHKEY for the tailnet listener (or both)")
+	}
+	return nil
+}
+
 // TailscaleConfig holds the optional embedded-Tailscale (tsnet) listener.
 // When AuthKey is set the server joins the tailnet as Hostname and serves
 // /mcp over HTTPS there, authenticating callers by WhoIs identity instead of
-// Cloudflare Access. The Cloudflare Tunnel keeps running alongside.
+// Cloudflare Access. It can run alongside the Cloudflare Tunnel or on its own.
 type TailscaleConfig struct {
 	AuthKey       string   `env:"AUTHKEY" help:"Tailscale auth key (tagged, reusable). Enables the tsnet listener."`
 	Hostname      string   `env:"HOSTNAME" default:"mcp-home" help:"tsnet node hostname"`
@@ -51,13 +65,30 @@ func (t TailscaleConfig) Validate() error {
 	return nil
 }
 
-// CloudflareConfig holds required Cloudflare Tunnel settings.
+// CloudflareConfig holds the optional Cloudflare Tunnel + Access front door.
+// The four credentials are all-or-nothing; TunnelName only matters when the
+// group is enabled.
 type CloudflareConfig struct {
-	APIToken   string `env:"API_TOKEN"   required:"" help:"Cloudflare API token with Tunnel:Edit and DNS:Edit permissions"`
-	AccountID  string `env:"ACCOUNT_ID"  required:"" help:"Cloudflare account ID"`
-	ZoneID     string `env:"ZONE_ID"     required:"" help:"Cloudflare DNS zone ID"`
-	Hostname   string `env:"HOSTNAME"    required:"" help:"Public hostname (e.g. mcp.example.com)"`
+	APIToken   string `env:"API_TOKEN"   help:"Cloudflare API token with Tunnel:Edit and DNS:Edit permissions. Enables the Cloudflare Tunnel."`
+	AccountID  string `env:"ACCOUNT_ID"  help:"Cloudflare account ID"`
+	ZoneID     string `env:"ZONE_ID"     help:"Cloudflare DNS zone ID"`
+	Hostname   string `env:"HOSTNAME"    help:"Public hostname (e.g. mcp.example.com)"`
 	TunnelName string `env:"TUNNEL_NAME" default:"mcp-server" help:"Tunnel name"`
+}
+
+// Enabled returns true if the Cloudflare Tunnel is fully configured.
+func (c CloudflareConfig) Enabled() bool {
+	return c.APIToken != "" && c.AccountID != "" && c.ZoneID != "" && c.Hostname != ""
+}
+
+// Validate returns an error if the Cloudflare group is partially configured.
+func (c CloudflareConfig) Validate() error {
+	return validateAllOrNothing("Cloudflare", map[string]string{
+		"CF_API_TOKEN":  c.APIToken,
+		"CF_ACCOUNT_ID": c.AccountID,
+		"CF_ZONE_ID":    c.ZoneID,
+		"CF_HOSTNAME":   c.Hostname,
+	})
 }
 
 // HassConfig holds optional Home Assistant settings.
