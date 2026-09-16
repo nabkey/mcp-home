@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/nabkey/mcp-home/compare/v1.10.0...v1.11.0) (2026-09-16)
+
+
+### Features
+
+* trim tool results and fold media intents to cut context usage ([#50](https://github.com/nabkey/mcp-home/issues/50)) ([ac7e033](https://github.com/nabkey/mcp-home/commit/ac7e033482b4fe5d14046adb9fc9bfe097d3de97))
+
 ## [1.10.0](https://github.com/nabkey/mcp-home/compare/v1.9.1...v1.10.0) (2026-09-16)
 
 
