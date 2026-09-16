@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/nabkey/mcp-home/compare/v1.9.1...v1.10.0) (2026-09-16)
+
+
+### Features
+
+* tsnet listener with WhoIs auth; Cloudflare becomes optional ([#48](https://github.com/nabkey/mcp-home/issues/48)) ([bc04fb7](https://github.com/nabkey/mcp-home/commit/bc04fb7ba139d2230640be0da85932ca71d2f3fa))
+
 ## [1.9.1](https://github.com/nabkey/mcp-home/compare/v1.9.0...v1.9.1) (2026-09-09)
 
 
