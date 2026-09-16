@@ -104,7 +104,7 @@ token. Allow them with `TS_ALLOWED_TAGS` (default `tag:voice-agent`) and/or
 those peers reach this node on 443, and HTTPS certificates must be enabled in
 the tailnet DNS settings.
 
-tsnet keeps its node key in `TS_STATE_DIR` (default `/data/tsstate`). Mount
+tsnet keeps its node key in `TS_STATE_DIR` (default `/home/nonroot/tsstate`, inside the existing `mcp-home-state` volume). Mount
 a volume there in Container Station or the node re-registers on every
 restart.
 

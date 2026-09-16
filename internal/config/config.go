@@ -35,7 +35,7 @@ type CLI struct {
 type TailscaleConfig struct {
 	AuthKey       string   `env:"AUTHKEY" help:"Tailscale auth key (tagged, reusable). Enables the tsnet listener."`
 	Hostname      string   `env:"HOSTNAME" default:"mcp-home" help:"tsnet node hostname"`
-	StateDir      string   `env:"STATE_DIR" default:"/data/tsstate" help:"tsnet state directory (persist it)"`
+	StateDir      string   `env:"STATE_DIR" default:"/home/nonroot/tsstate" help:"tsnet state directory (persist it)"`
 	AllowedLogins []string `env:"ALLOWED_LOGINS" help:"Tailscale logins allowed to call /mcp"`
 	AllowedTags   []string `env:"ALLOWED_TAGS" default:"tag:voice-agent" help:"Tailscale node tags allowed to call /mcp"`
 }
