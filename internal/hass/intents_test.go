@@ -172,13 +172,21 @@ func TestIntentCatalogIsWellFormed(t *testing.T) {
 	seenTool := map[string]bool{}
 	seenIntent := map[string]bool{}
 	for _, d := range IntentCatalog {
-		if d.ToolName == "" || d.Intent == "" || d.Description == "" {
+		if d.Name() == "" || d.Intent == "" || d.Description == "" {
 			t.Errorf("incomplete entry: %+v", d)
 		}
-		if seenTool[d.ToolName] {
-			t.Errorf("duplicate tool name %q", d.ToolName)
+		if (d.ToolName == "") == (d.Group == "") || (d.Group != "") != (d.Action != "") {
+			t.Errorf("%s: set exactly one of ToolName or Group+Action", d.Name())
 		}
-		seenTool[d.ToolName] = true
+		if d.Group != "" {
+			if _, ok := IntentGroups[d.Group]; !ok {
+				t.Errorf("%s: group %q is not in IntentGroups", d.Name(), d.Group)
+			}
+		}
+		if seenTool[d.Name()] {
+			t.Errorf("duplicate tool name %q", d.Name())
+		}
+		seenTool[d.Name()] = true
 		if seenIntent[d.Intent] {
 			t.Errorf("duplicate intent %q", d.Intent)
 		}

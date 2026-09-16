@@ -55,21 +55,62 @@ func (t *Tools) Register(server *mcp.Server) {
 
 // --- list_esphome_devices ---
 
+type listDevicesArgs struct {
+	Full bool `json:"full,omitempty" jsonschema:"Return the raw dashboard records (loaded integrations, platforms, build sizes). Default returns a compact summary per device."`
+}
+
 func (t *Tools) registerListDevices(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_esphome_devices",
 		Description: "List the devices configured in the ESPHome dashboard, with their configuration file, address, online status, and installed/available versions.",
 		Annotations: mcputil.ReadOnly(),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args listDevicesArgs) (*mcp.CallToolResult, any, error) {
 		devices, err := t.client.ListDevices(ctx)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
+		}
+		if !args.Full {
+			devices = slimDevices(devices)
 		}
 		return mcputil.JSONResult(map[string]any{
 			"devices": devices,
 			"count":   len(devices),
 		})
 	})
+}
+
+// deviceSummaryKeys are the devices/list fields kept by default. The raw
+// record also carries every loaded integration and platform, which is a few
+// kilobytes per device and only matters when reading the YAML anyway.
+var deviceSummaryKeys = []string{
+	"name", "friendly_name", "configuration", "address", "ip", "area", "comment",
+	"target_platform", "board_id", "current_version", "update_available", "has_pending_changes",
+}
+
+// slimDevices projects dashboard device records to a summary, lifting the
+// deployed version and online state out of runtime_state.
+func slimDevices(devices []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(devices))
+	for _, d := range devices {
+		rec := make(map[string]any, len(deviceSummaryKeys)+2)
+		for _, k := range deviceSummaryKeys {
+			v, ok := d[k]
+			if !ok || v == nil || v == "" {
+				continue
+			}
+			rec[k] = v
+		}
+		if rs, ok := d["runtime_state"].(map[string]any); ok {
+			if v, ok := rs["state"]; ok && v != "" {
+				rec["state"] = v
+			}
+			if v, ok := rs["deployed_version"]; ok && v != "" {
+				rec["deployed_version"] = v
+			}
+		}
+		out = append(out, rec)
+	}
+	return out
 }
 
 // --- list_esphome_secrets ---

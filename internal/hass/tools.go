@@ -63,13 +63,16 @@ func (t *Tools) Register(server *mcp.Server) {
 // --- get_home_states ---
 
 type getStatesArgs struct {
-	Domain string `json:"domain,omitempty" jsonschema:"Optional domain to filter entities (e.g. light switch sensor climate cover lock media_player todo)"`
+	Domain     string `json:"domain,omitempty" jsonschema:"Domain(s) to include, comma-separated (e.g. light or light,switch,climate)."`
+	EntityID   string `json:"entity_id,omitempty" jsonschema:"Exact entity id(s), comma-separated (e.g. light.kitchen,sensor.outdoor_temp)."`
+	Search     string `json:"search,omitempty" jsonschema:"Case-insensitive substring matched against entity_id and friendly name (e.g. kitchen)."`
+	Attributes bool   `json:"attributes,omitempty" jsonschema:"Include full attributes and timestamps. Default returns only entity_id, state, name, unit and last_changed."`
 }
 
 func (t *Tools) registerGetStates(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_home_states",
-		Description: "Get current states of Home Assistant entities. Use domain filter to get specific types: light, switch, sensor, climate, cover, lock, media_player, todo.",
+		Description: "Get current states of Home Assistant entities. Filter by domain, entity_id or search; an unfiltered call returns every entity (hundreds), so narrow it. Set attributes=true only when you need brightness, color, options and other attributes.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getStatesArgs) (*mcp.CallToolResult, any, error) {
 		states, err := t.client.GetStates(ctx)
@@ -77,19 +80,16 @@ func (t *Tools) registerGetStates(server *mcp.Server) {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
 
-		if args.Domain != "" {
-			prefix := args.Domain + "."
-			filtered := make([]State, 0)
-			for _, s := range states {
-				if strings.HasPrefix(s.EntityID, prefix) {
-					filtered = append(filtered, s)
-				}
-			}
-			states = filtered
-		}
+		states = filterStates(states, splitList(args.Domain), splitList(args.EntityID), args.Search)
 
+		if args.Attributes {
+			return mcputil.JSONResult(map[string]any{
+				"states": states,
+				"count":  len(states),
+			})
+		}
 		return mcputil.JSONResult(map[string]any{
-			"states": states,
+			"states": slimStates(states),
 			"count":  len(states),
 		})
 	})
@@ -591,19 +591,23 @@ func (t *Tools) registerManageScenes(server *mcp.Server) {
 // --- get_home_registry ---
 
 type getHomeRegistryArgs struct {
-	Kind string `json:"kind" jsonschema:"Registry to fetch: areas, devices, entities, labels, floors, or all (returns the full topology in one call)."`
+	Kind   string `json:"kind,omitempty" jsonschema:"Registry to fetch: areas, devices, entities, labels, floors, or all (default)."`
+	AreaID string `json:"area_id,omitempty" jsonschema:"Only areas, devices and entities in this area (entities inherit their device's area)."`
+	Domain string `json:"domain,omitempty" jsonschema:"Only entities in these domain(s), comma-separated (e.g. light,switch)."`
+	Full   bool   `json:"full,omitempty" jsonschema:"Return the raw registry records (ids, timestamps, options, config entries). Default returns a compact projection."`
 }
 
 func (t *Tools) registerGetHomeRegistry(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_home_registry",
-		Description: "Get Home Assistant topology data (areas, devices, entities, labels, floors). Use kind=all to fetch the full home topology in one call so the agent can map entities to rooms, devices, and floors.",
+		Description: "Get Home Assistant topology (areas, devices, entities, labels, floors) to map entities to rooms, devices and floors. Compact by default; narrow with area_id or domain, since the full entity registry runs to thousands of rows.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getHomeRegistryArgs) (*mcp.CallToolResult, any, error) {
 		kind := strings.ToLower(strings.TrimSpace(args.Kind))
 		if kind == "" {
 			kind = "all"
 		}
+		domains := splitList(args.Domain)
 
 		wsClient := t.client.NewWebsocketClient()
 		if err := wsClient.Dial(ctx); err != nil {
@@ -611,81 +615,84 @@ func (t *Tools) registerGetHomeRegistry(server *mcp.Server) {
 		}
 		defer func() { _ = wsClient.Close() }()
 
-		switch kind {
-		case "areas":
+		result := map[string]any{}
+		want := func(k string) bool { return kind == "all" || kind == k }
+
+		if want("areas") {
 			items, err := wsClient.ListAreas()
-			if err != nil {
-				return mcputil.Errorf("%v", err), nil, nil
-			}
-			return mcputil.JSONResult(map[string]any{"areas": items, "count": len(items)})
-		case "devices":
-			items, err := wsClient.ListDevices()
-			if err != nil {
-				return mcputil.Errorf("%v", err), nil, nil
-			}
-			return mcputil.JSONResult(map[string]any{"devices": items, "count": len(items)})
-		case "entities":
-			items, err := wsClient.ListEntityRegistry()
-			if err != nil {
-				return mcputil.Errorf("%v", err), nil, nil
-			}
-			return mcputil.JSONResult(map[string]any{"entities": items, "count": len(items)})
-		case "labels":
-			items, err := wsClient.ListLabels()
-			if err != nil {
-				return mcputil.Errorf("%v", err), nil, nil
-			}
-			return mcputil.JSONResult(map[string]any{"labels": items, "count": len(items)})
-		case "floors":
-			items, err := wsClient.ListFloors()
-			if err != nil {
-				return mcputil.Errorf("%v", err), nil, nil
-			}
-			return mcputil.JSONResult(map[string]any{"floors": items, "count": len(items)})
-		case "all":
-			areas, err := wsClient.ListAreas()
 			if err != nil {
 				return mcputil.Errorf("areas: %v", err), nil, nil
 			}
-			devices, err := wsClient.ListDevices()
-			if err != nil {
+			if !args.Full {
+				items = slimAreas(items)
+			}
+			result["areas"] = filterByArea(items, args.AreaID)
+		}
+		var devices []map[string]any
+		if want("devices") || (want("entities") && !args.Full) {
+			var err error
+			if devices, err = wsClient.ListDevices(); err != nil {
 				return mcputil.Errorf("devices: %v", err), nil, nil
 			}
-			entities, err := wsClient.ListEntityRegistry()
+		}
+		if want("devices") {
+			items := devices
+			if !args.Full {
+				items = slimDevices(items)
+			}
+			result["devices"] = filterByArea(items, args.AreaID)
+		}
+		if want("entities") {
+			items, err := wsClient.ListEntityRegistry()
 			if err != nil {
 				return mcputil.Errorf("entities: %v", err), nil, nil
 			}
-			labels, err := wsClient.ListLabels()
+			if !args.Full {
+				items = slimEntities(items, devices)
+			}
+			result["entities"] = filterEntitiesByDomain(filterByArea(items, args.AreaID), domains)
+		}
+		if want("labels") {
+			items, err := wsClient.ListLabels()
 			if err != nil {
 				return mcputil.Errorf("labels: %v", err), nil, nil
 			}
-			floors, err := wsClient.ListFloors()
+			if !args.Full {
+				items = slimLabels(items)
+			}
+			result["labels"] = items
+		}
+		if want("floors") {
+			items, err := wsClient.ListFloors()
 			if err != nil {
 				return mcputil.Errorf("floors: %v", err), nil, nil
 			}
-			return mcputil.JSONResult(map[string]any{
-				"areas":    areas,
-				"devices":  devices,
-				"entities": entities,
-				"labels":   labels,
-				"floors":   floors,
-			})
-		default:
+			if !args.Full {
+				items = slimFloors(items)
+			}
+			result["floors"] = items
+		}
+		if len(result) == 0 {
 			return mcputil.TextResult(fmt.Sprintf("Unknown kind: %s (use areas, devices, entities, labels, floors, all)", args.Kind)), nil, nil
 		}
+		if kind != "all" {
+			result["count"] = len(result[kind].([]map[string]any))
+		}
+		return mcputil.JSONResult(result)
 	})
 }
 
 // --- list_home_services ---
 
 type listHomeServicesArgs struct {
-	Domain string `json:"domain,omitempty" jsonschema:"Optional domain to filter services (e.g. light, climate, vacuum). Omit to get all domains."`
+	Domain  string `json:"domain,omitempty" jsonschema:"Domain to describe in full (e.g. light, climate, vacuum), with every service's fields and target selector. Omit for a names-only index of all domains."`
+	Service string `json:"service,omitempty" jsonschema:"With domain: describe only this service (e.g. turn_on)."`
 }
 
 func (t *Tools) registerListHomeServices(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_home_services",
-		Description: "List available Home Assistant services with their fields and target selectors. Use this before call_home_service to discover valid (domain, service) pairs and required parameters.",
+		Description: "Discover Home Assistant services before call_home_service. Without domain it returns just domain → service names; pass domain (and optionally service) for the field schemas.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args listHomeServicesArgs) (*mcp.CallToolResult, any, error) {
 		services, err := t.client.GetServices(ctx)
@@ -693,20 +700,29 @@ func (t *Tools) registerListHomeServices(server *mcp.Server) {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
 
-		if args.Domain != "" {
-			filtered := make([]map[string]any, 0)
-			for _, s := range services {
-				if d, _ := s["domain"].(string); d == args.Domain {
-					filtered = append(filtered, s)
-				}
-			}
-			services = filtered
+		if args.Domain == "" {
+			names := serviceNames(services)
+			return mcputil.JSONResult(map[string]any{
+				"domains": names,
+				"count":   len(names),
+			})
 		}
 
-		return mcputil.JSONResult(map[string]any{
-			"services": services,
-			"count":    len(services),
-		})
+		for _, s := range services {
+			if d, _ := s["domain"].(string); d != args.Domain {
+				continue
+			}
+			svcs, _ := s["services"].(map[string]any)
+			if args.Service != "" {
+				svc, ok := svcs[args.Service]
+				if !ok {
+					return mcputil.Errorf("no service %s.%s", args.Domain, args.Service), nil, nil
+				}
+				return mcputil.JSONResult(map[string]any{"domain": args.Domain, "service": args.Service, "definition": svc})
+			}
+			return mcputil.JSONResult(map[string]any{"domain": args.Domain, "services": svcs, "count": len(svcs)})
+		}
+		return mcputil.Errorf("no services in domain %q", args.Domain), nil, nil
 	})
 }
 

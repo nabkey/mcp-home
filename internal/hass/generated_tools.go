@@ -53,6 +53,9 @@ func (t *Tools) RegisterGenerated(ctx context.Context, server *mcp.Server) {
 
 	registered := 0
 	for _, def := range IntentCatalog {
+		if def.Group != "" {
+			continue // registered below as part of its group
+		}
 		if domains != nil && !hasAnyDomain(domains, def.Domains) {
 			continue
 		}
@@ -65,6 +68,32 @@ func (t *Tools) RegisterGenerated(ctx context.Context, server *mcp.Server) {
 			continue
 		}
 		t.registerIntentTool(server, def)
+		registered++
+	}
+	groups := make([]string, 0, len(IntentGroups))
+	for name := range IntentGroups {
+		groups = append(groups, name)
+	}
+	sort.Strings(groups)
+	for _, name := range groups {
+		var members []IntentDef
+		for _, def := range groupMembers(name) {
+			if domains != nil && !hasAnyDomain(domains, def.Domains) {
+				continue
+			}
+			// A denied action drops out of the enum; the rest of the
+			// group stays available.
+			if denied := t.deniedServices(def); denied != "" {
+				slog.Info("hass: intent action withheld by service deny policy",
+					"tool", name, "action", def.Action, "denied", denied)
+				continue
+			}
+			members = append(members, def)
+		}
+		if len(members) == 0 {
+			continue
+		}
+		t.registerIntentGroup(server, name, members)
 		registered++
 	}
 	slog.Info("hass: registered intent tools", "count", registered)
@@ -150,6 +179,62 @@ func (t *Tools) registerIntentTool(server *mcp.Server, def IntentDef) {
 		slots, err := decodeArgs(req, resolved)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil
+		}
+		result, err := t.client.HandleIntent(ctx, def.Intent, slots)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil
+		}
+		res, _, _ := mcputil.JSONResult(result)
+		return res, nil
+	})
+}
+
+// registerIntentGroup adds one tool for several intents, selected by an
+// action argument. The merged schema validates types and the target
+// requirement; which slots an action needs is checked here, and only that
+// action's slots are forwarded so Home Assistant never sees a stray one.
+func (t *Tools) registerIntentGroup(server *mcp.Server, name string, members []IntentDef) {
+	annotations := mcputil.Additive()
+	byAction := make(map[string]IntentDef, len(members))
+	for _, m := range members {
+		byAction[m.Action] = m
+		if m.Destructive {
+			annotations = mcputil.Destructive()
+		}
+	}
+
+	schema := groupInputSchema(members)
+	resolved := resolveSchema(name, schema)
+
+	server.AddTool(&mcp.Tool{
+		Name:        name,
+		Description: IntentGroups[name].Description,
+		InputSchema: schema,
+		Annotations: annotations,
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, err := decodeArgs(req, resolved)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil
+		}
+		action, _ := args["action"].(string)
+		def, ok := byAction[action]
+		if !ok {
+			return mcputil.Errorf("unknown action %q", action), nil
+		}
+		slots := map[string]any{}
+		for _, key := range []string{"name", "area", "floor", "domain"} {
+			if v, ok := args[key]; ok {
+				slots[key] = v
+			}
+		}
+		for _, slot := range def.Slots {
+			v, ok := args[slot.Name]
+			if !ok && slot.Required {
+				return mcputil.Errorf("invalid arguments: action %q requires %q", action, slot.Name), nil
+			}
+			if ok {
+				slots[slot.Name] = v
+			}
 		}
 		result, err := t.client.HandleIntent(ctx, def.Intent, slots)
 		if err != nil {
