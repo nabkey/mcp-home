@@ -14,24 +14,29 @@ import (
 	"github.com/nabkey/mcp-home/internal/media"
 )
 
-// New creates a configured MCP server with tools registered based on cfg.
-// version is the build version injected into the binary (e.g. "1.4.0" or "dev").
-// ctx bounds the startup queries that generated tools make against Home
-// Assistant to decide what to register.
-func New(ctx context.Context, cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{
+// newServer builds the bare mcp.Server with the options every instance shares;
+// New adds the tool sets on top.
+func newServer(version string, logger *slog.Logger) *mcp.Server {
+	return mcp.NewServer(&mcp.Implementation{
 		Name:    "mcp-home",
 		Version: version,
 	}, &mcp.ServerOptions{
 		Instructions: "Home Assistant MCP server. Provides tools to query and control smart home devices, manage automations and scripts, view event history, manage to-do lists, search/add media via Sonarr/Radarr, view Frigate NVR cameras and detection events, and manage ESPHome devices (read/write configs, validate, compile, OTA upload, logs).",
 		Logger:       logger,
+		// Let clients cache the tool list instead of re-fetching it every turn.
+		SetCacheable: setCacheable,
 	})
+}
+
+// New creates a configured MCP server with tools registered based on cfg.
+// version is the build version injected into the binary (e.g. "1.4.0" or "dev").
+// ctx bounds the startup queries that generated tools make against Home
+// Assistant to decide what to register.
+func New(ctx context.Context, cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
+	server := newServer(version, logger)
 
 	// Audit every tool call with the authenticated user.
 	server.AddReceivingMiddleware(auditMiddleware(logger))
-
-	// Let clients cache the tool list instead of re-fetching it every turn.
-	server.AddReceivingMiddleware(cacheHintMiddleware())
 
 	if cfg.Hass.Enabled() {
 		hassTools, err := hass.NewTools(cfg.Hass.URL, cfg.Hass.Token, cfg.Hass.DenyServices)

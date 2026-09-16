@@ -14,7 +14,7 @@ import (
 // testHandler builds the production handler around a server with one tool.
 func testHandler(t *testing.T) http.Handler {
 	t.Helper()
-	srv := mcp.NewServer(&mcp.Implementation{Name: "mcp-home", Version: "test"}, nil)
+	srv := newServer("test", nil)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ping",
 		Description: "test tool",
@@ -22,7 +22,6 @@ func testHandler(t *testing.T) http.Handler {
 	}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pong"}}}, nil, nil
 	})
-	srv.AddReceivingMiddleware(cacheHintMiddleware())
 	return NewHTTPHandler(srv, nil)
 }
 
