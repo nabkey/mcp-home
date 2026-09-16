@@ -12,9 +12,11 @@ import (
 // audit log line.
 const maxAuditArgsLen = 512
 
-// auditMiddleware logs every tool call with the authenticated user (the
-// Cloudflare Access email carried in the bearer token), the tool name, its
-// arguments, the outcome, and the duration. This is the audit trail for what
+// auditMiddleware logs every tool call with the authenticated user, the tool
+// name, its arguments, the outcome, and the duration. The user is whatever
+// the front door recorded as auth.TokenInfo.UserID: the Cloudflare Access
+// email from the JWT, or the WhoIs identity (login@node or node(tag:...)) on
+// the tailnet listener. This is the audit trail for what
 // the assistant did in the home and on whose behalf.
 func auditMiddleware(logger *slog.Logger) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {

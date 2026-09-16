@@ -2,6 +2,8 @@
 
 This document describes the security properties of the MCP server.
 
+The server has two optional front doors and needs at least one. Sections 1–3 describe the Cloudflare path; section 9 describes the tailnet path. Everything from section 4 on applies to both.
+
 ## Architecture
 
 ```
@@ -12,6 +14,13 @@ Claude.ai / Claude Code CLI
         → http://127.0.0.1:<random>/mcp
           → [Cf-Access-Jwt-Assertion → Bearer bridge]
             → [auth.RequireBearerToken] → StreamableHTTPHandler (stateless)
+```
+
+```
+Tailnet peer
+  → WireGuard → tsnet node (TS_HOSTNAME.<tailnet>.ts.net:443)
+    → [tsauth.Middleware: WhoIs → allowlist]
+      → [auth.RequireBearerToken, placeholder token] → StreamableHTTPHandler (stateless)
 ```
 
 ## Authentication Flow
@@ -88,7 +97,22 @@ The cloudflared tunnel token is passed via `TUNNEL_TOKEN` environment variable, 
 
 ### 8. Audit Logging
 
-Every tool call is logged with the authenticated user (CF Access email from the JWT), tool name, truncated arguments, outcome, and duration — a per-user audit trail of everything the assistant did in the home.
+Every tool call is logged with the authenticated user, tool name, truncated arguments, outcome, and duration — a per-user audit trail of everything the assistant did in the home. On the Cloudflare path the user is the CF Access email from the JWT. On the tailnet path it is the WhoIs identity: `login@node` for a user-owned device, `node(tag:...)` for a tagged one. Both arrive via `auth.TokenInfo.UserID`, so the audit middleware does not care which door the call came through.
+
+### 9. Tailnet Listener
+
+When `TS_AUTHKEY` is set the server runs an embedded Tailscale node (tsnet) and serves `/mcp` on the tailnet over TLS with a Tailscale-issued certificate. Nothing is published on the host's network interfaces; tsnet dials out to the coordination server and peers the same way cloudflared dials out to Cloudflare.
+
+Trust boundary:
+- **Reachability** is governed by the tailnet ACL. A peer the ACL does not admit to this node on 443 never completes a WireGuard handshake, so its requests never reach the process.
+- **Identity** comes from `WhoIs` on the request's remote address, which maps the WireGuard peer to a node and (for user-owned devices) a login. It cannot be spoofed by anything in the HTTP request; there is no token, cookie or header to forge.
+- **Authorization** is the `TS_ALLOWED_TAGS` / `TS_ALLOWED_LOGINS` allowlist, applied on every request. Config validation refuses an empty allowlist. A tagged node is matched only by tag, never by login (tagged nodes report the synthetic `tagged-devices` login).
+- Any `Authorization` header the client sends is discarded before the request reaches the MCP handler, so a tailnet peer cannot present a Cloudflare JWT or anything else to escalate.
+
+Limits:
+- `--insecure` does not apply to this listener and cannot disable the WhoIs gate.
+- The node key lives in `TS_STATE_DIR`. Anyone who can read that directory can impersonate the node on the tailnet; it is persisted so restarts do not re-register, and should be on a volume with the same protection as the container's other state.
+- The auth key should be tagged (so the node carries `tag:mcp-home` rather than a user's identity), reusable only if you need it to be, and revocable from the admin console.
 
 ## Open Questions
 

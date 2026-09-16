@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Go MCP (Model Context Protocol) server for smart home and media management, served over HTTPS via Cloudflare Tunnel. Built with the [go-sdk](https://github.com/modelcontextprotocol/go-sdk) MCP library. Integrates Home Assistant, Sonarr/Radarr, and Frigate NVR.
+Go MCP (Model Context Protocol) server for smart home and media management, served over HTTPS via Cloudflare Tunnel and/or an embedded Tailscale node. Built with the [go-sdk](https://github.com/modelcontextprotocol/go-sdk) MCP library. Integrates Home Assistant, Sonarr/Radarr, and Frigate NVR.
 
 ## Build & Run
 
@@ -41,7 +41,12 @@ Versioning is [SemVer](https://semver.org), automated via [release-please](https
 
 All config is via environment variables (or CLI flags). Uses [Kong](https://github.com/alecthomas/kong) with `envprefix` tags — run `go run ./cmd/mcp-server --help` to see all flags with their env var names.
 
-**Cloudflare (required):** `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `CF_ZONE_ID`, `CF_HOSTNAME`, `CF_TUNNEL_NAME` (default: `mcp-server`)
+**Front doors (at least one required; both may run at once):**
+
+- **Cloudflare:** `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `CF_ZONE_ID`, `CF_HOSTNAME` (all-or-nothing), `CF_TUNNEL_NAME` (default: `mcp-server`). Public HTTPS via Cloudflare Tunnel, authenticated by Cloudflare Access OAuth. `--insecure` disables JWT validation on this listener only.
+- **Tailscale:** `TS_AUTHKEY` enables an embedded tsnet node; `TS_HOSTNAME` (default `mcp-home`), `TS_STATE_DIR` (default `/home/nonroot/tsstate`, persist it), `TS_ALLOWED_TAGS` (default `tag:voice-agent`), `TS_ALLOWED_LOGINS`. At least one allowlist must be non-empty. Callers are identified by WireGuard peer via `WhoIs`; there is no token and `--insecure` does not apply.
+
+The root `CLI.Validate` rejects a configuration with neither, so a server nobody can reach never starts.
 
 **Tool integrations (optional groups):** Each group is all-or-nothing — partially setting a group (e.g., `HASS_URL` without `HASS_TOKEN`) produces a clear error at startup.
 
@@ -61,11 +66,14 @@ Config struct definitions are in `internal/config/config.go`. Each optional grou
 
 ## Architecture
 
-Single entrypoint (`cmd/mcp-server/`) that:
-1. Auto-discovers Cloudflare Access team domain + application AUD from the API
-2. Starts an HTTP server on a random localhost port (serves `/mcp`, `/mcp/sse`, `/health`, `/.well-known/oauth-protected-resource`)
-3. Uses the Cloudflare API (`cloudflare-go/v4`) to create/reuse a named tunnel, configure ingress, and ensure a DNS CNAME record
-4. Runs `cloudflared tunnel run` as a subprocess (token via `TUNNEL_TOKEN` env var)
+Single entrypoint (`cmd/mcp-server/`) that builds one MCP handler and mounts it behind whichever front doors are configured, running them in an `errgroup` so the first failure (or SIGINT/SIGTERM) shuts everything down:
+
+- **Cloudflare** (`serveCloudflare`):
+  1. Auto-discovers Cloudflare Access team domain + application AUD from the API
+  2. Starts an HTTP server on a random localhost port (serves `/mcp`, `/mcp/sse`, `/health`, `/.well-known/oauth-protected-resource`)
+  3. Uses the Cloudflare API (`cloudflare-go/v4`) to create/reuse a named tunnel, configure ingress, and ensure a DNS CNAME record
+  4. Runs `cloudflared tunnel run` as a subprocess (token via `TUNNEL_TOKEN` env var); a cloudflared exit while the process is still live is treated as fatal
+- **Tailscale** (`serveTailnet`): brings up a tsnet node from `TS_STATE_DIR`, listens on `:443` on the tailnet with a Tailscale-issued cert, and serves `/mcp`, `/mcp/sse`, `/health` behind `tsauth.Middleware`. No ports are published on the host; tsnet dials out like cloudflared does.
 
 ```
 Claude.ai / Claude Code CLI
@@ -78,6 +86,16 @@ Claude.ai / Claude Code CLI
 ```
 
 Clients connect directly to `https://CF_HOSTNAME/mcp`. Cloudflare Access acts as both the edge gateway and OAuth 2.1 authorization server. CF Access injects a signed JWT via `Cf-Access-Jwt-Assertion`; a bridge middleware copies it to `Authorization: Bearer` for the go-sdk's `auth.RequireBearerToken` to validate. See `SECURITY.md` for the full security model.
+
+```
+Tailnet peer (e.g. voice agent)
+  → WireGuard → tsnet node (TS_HOSTNAME.<tailnet>.ts.net:443, Tailscale cert)
+    → tsauth.Middleware: WhoIs(remote addr) → allowlist (TS_ALLOWED_TAGS / TS_ALLOWED_LOGINS)
+      → auth.RequireBearerToken (placeholder token; records the WhoIs identity as TokenInfo)
+        → StreamableHTTPHandler → mcp.Server
+```
+
+On the tailnet path the identity is the WireGuard peer, not a token. The middleware still passes through `auth.RequireBearerToken` with a placeholder bearer and a verifier that reads the WhoIs identity from the context: the go-sdk's `TokenInfo` context key is unexported, and both the transport's session-user check and `auditMiddleware` read the user from there. Without that step every tailnet tool call would be audit-logged as `anonymous`. Any `Authorization` header a tailnet client sends is discarded before this point.
 
 ### Transport
 
@@ -96,6 +114,7 @@ The streamable HTTP transport runs **stateless** (`internal/server/http.go`), wh
 - `internal/config/` — Kong CLI struct with `envprefix` tags and `Enabled()`/`Validate()` methods.
 - `internal/server/` — Server factory. Creates `mcp.Server` and conditionally registers tool sets based on `config.CLI`. `http.go` builds the stateless streamable HTTP handler; `audit.go` is the tool-call audit middleware.
 - `internal/tunnel/` — Cloudflare Tunnel lifecycle: create/reuse tunnel via API, configure ingress rules, ensure DNS CNAME, get token, exec cloudflared. Auto-downloads cloudflared if not on PATH.
+- `internal/tsauth/` — Embedded Tailscale node (tsnet): start/up, TLS listener, and the `WhoIs` allowlist middleware that records the caller as `auth.TokenInfo`.
 - `internal/cfaccess/` — Cloudflare Access JWT validation and auto-discovery. `Discover()` finds the team domain and application AUD from the API. `TokenVerifier()` adapts JWT validation to the go-sdk's `auth.RequireBearerToken` interface.
 - `internal/middleware/` — HTTP request logging middleware.
 - `internal/mcputil/` — Shared MCP result helpers (`TextResult`, `JSONResult`).
@@ -155,7 +174,7 @@ The `internal/tunnel/` package manages the full tunnel lifecycle via the Cloudfl
 - Creates or updates a proxied CNAME DNS record pointing to `<tunnel-id>.cfargotunnel.com`
 - Retrieves the tunnel token and runs `cloudflared tunnel run` (token via env var)
 
-Authentication: the server auto-discovers the CF Access team domain and application AUD at startup, validates Bearer tokens (RS256 JWTs signed by CF Access), and serves `/.well-known/oauth-protected-resource` for OAuth discovery. A bridge middleware copies `Cf-Access-Jwt-Assertion` to `Authorization: Bearer` since CF Access injects the JWT in its own header. Pass `--insecure` to disable auth for local development.
+Authentication: the server auto-discovers the CF Access team domain and application AUD at startup, validates Bearer tokens (RS256 JWTs signed by CF Access), and serves `/.well-known/oauth-protected-resource` for OAuth discovery. A bridge middleware copies `Cf-Access-Jwt-Assertion` to `Authorization: Bearer` since CF Access injects the JWT in its own header. Pass `--insecure` to disable auth for local development. All of this section applies only when the Cloudflare group is configured; a Tailscale-only deployment skips it entirely.
 
 ## MCP Tools Provided
 
