@@ -95,3 +95,38 @@ func TestToolListIsSinglePage(t *testing.T) {
 		t.Errorf("hint = ttl %d scope %q, want %d private", res.TTLMs, res.CacheScope, toolListTTL.Milliseconds())
 	}
 }
+
+// The SDK advertises a logging capability by default. SEP-2577 deprecated
+// logging in 2026-07-28 and this server never emits notifications/message, so
+// the default is overridden. Pinned so a future SDK default cannot bring it
+// back, and so the override is seen not to suppress the tools capability the
+// SDK layers on top.
+func TestNoDeprecatedLoggingCapability(t *testing.T) {
+	ctx := context.Background()
+	srv := newServer("test", slog.New(slog.DiscardHandler))
+	srv.AddTool(&mcp.Tool{Name: "ping", InputSchema: map[string]any{"type": "object"}},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{}, nil
+		})
+
+	ct, st := mcp.NewInMemoryTransports()
+	if _, err := srv.Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cs.Close() }()
+
+	caps := cs.InitializeResult().Capabilities
+	if caps == nil {
+		t.Fatal("no server capabilities returned")
+	}
+	if caps.Logging != nil { //nolint:staticcheck // reading the deprecated field is the point: assert it is not advertised
+		t.Error("server advertises the deprecated logging capability")
+	}
+	if caps.Tools == nil {
+		t.Error("tools capability missing: the Capabilities override must not hide registered tools")
+	}
+}

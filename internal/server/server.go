@@ -25,6 +25,12 @@ func newServer(version string, logger *slog.Logger) *mcp.Server {
 		Logger:       logger,
 		// Let clients cache the tool list instead of re-fetching it every turn.
 		SetCacheable: setCacheable,
+		// Start from no capabilities. The SDK's own default is a lone
+		// logging capability, which SEP-2577 deprecated in 2026-07-28 and
+		// this server never uses: it sends no notifications/message and
+		// logs to slog instead. Tools is still advertised, because the SDK
+		// adds it on top of this for whatever gets registered.
+		Capabilities: &mcp.ServerCapabilities{},
 	})
 }
 
