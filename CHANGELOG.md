@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/nabkey/mcp-home/compare/v1.12.0...v1.13.0) (2026-09-26)
+
+
+### Features
+
+* add LOG_FORMAT option for text or JSON logs ([#55](https://github.com/nabkey/mcp-home/issues/55)) ([754ddf4](https://github.com/nabkey/mcp-home/commit/754ddf4a34237cfc5f3d75d951ab0e6360195c9e))
+
 ## [1.12.0](https://github.com/nabkey/mcp-home/compare/v1.11.0...v1.12.0) (2026-09-16)
 
 
