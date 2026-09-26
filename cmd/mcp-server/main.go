@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net"
@@ -37,16 +38,25 @@ func main() {
 		kong.Vars{"version": version},
 	)
 
-	var level slog.Level
-	// Kong's enum tag guarantees the value parses.
-	_ = level.UnmarshalText([]byte(cli.LogLevel))
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	logger.Info("mcp-server starting", "version", version, "log_level", level)
+	logger := newLogger(os.Stderr, cli.LogLevel, cli.LogFormat)
+	logger.Info("mcp-server starting", "version", version, "log_level", cli.LogLevel, "log_format", cli.LogFormat)
 
 	if err := run(cli, logger); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// newLogger builds the process logger. Kong's enum tags guarantee both
+// values are valid, so an unparsable level falls back to info and any format
+// other than json is text.
+func newLogger(w io.Writer, level, format string) *slog.Logger {
+	var lvl slog.Level
+	_ = lvl.UnmarshalText([]byte(level))
+	opts := &slog.HandlerOptions{Level: lvl}
+	if format == "json" {
+		return slog.New(slog.NewJSONHandler(w, opts))
+	}
+	return slog.New(slog.NewTextHandler(w, opts))
 }
 
 func run(cli config.CLI, logger *slog.Logger) error {

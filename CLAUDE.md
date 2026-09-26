@@ -56,7 +56,7 @@ The root `CLI.Validate` rejects a configuration with neither, so a server nobody
 - `FRIGATE_URL` — Frigate NVR
 - `ESPHOME_URL` — ESPHome dashboard (the HA ESPHome add-on); optional `ESPHOME_PASSWORD` if the dashboard has auth enabled
 
-`LOG_LEVEL` (debug/info/warn/error) controls slog verbosity. Every tool call is audit-logged with the CF Access user via an MCP receiving middleware (`internal/server/audit.go`). All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
+`LOG_LEVEL` (debug/info/warn/error) controls slog verbosity; `LOG_FORMAT` (text/json, default text) picks the slog handler. Every tool call is audit-logged with the CF Access user via an MCP receiving middleware (`internal/server/audit.go`). All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
 
 Results are budgeted for a model's context, not a screen: `mcputil.JSONResult` emits compact JSON, and the list-shaped tools (`get_home_states`, `get_home_registry`, `list_home_services`, `list_esphome_devices`) return a slim projection by default (`internal/hass/slim.go`) with `attributes=true` / `full=true` / a `domain` for the raw record. Measured on a real instance, an unfiltered state dump was ~93k tokens and the full registry ~420k before this; the same calls are ~33k and ~71k now, and the filtered forms are hundreds. Keep new list tools on the same pattern.
 
