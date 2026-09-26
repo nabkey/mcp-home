@@ -23,6 +23,7 @@ type CLI struct {
 	Cloudflare CloudflareConfig `embed:"" prefix:"cf-"      envprefix:"CF_"`
 	Insecure   bool             `env:"INSECURE" default:"false" help:"Skip Cloudflare Access JWT validation on the tunnel listener (DANGEROUS: exposes server without auth). Has no effect on the tailnet listener."`
 	LogLevel   string           `env:"LOG_LEVEL" default:"info" enum:"debug,info,warn,error" help:"Log level (debug, info, warn, error)"`
+	LogFormat  string           `env:"LOG_FORMAT" default:"text" enum:"text,json" help:"Log output format (text, json)"`
 	Hass       HassConfig       `embed:"" prefix:"hass-"    envprefix:"HASS_"`
 	Sonarr     SonarrConfig     `embed:"" prefix:"sonarr-"  envprefix:"SONARR_"`
 	Radarr     RadarrConfig     `embed:"" prefix:"radarr-"  envprefix:"RADARR_"`

@@ -66,7 +66,7 @@ All configuration is via environment variables (see `.env.example`) or CLI flags
 | Frigate | `FRIGATE_URL` | No |
 | ESPHome | `ESPHOME_URL` (optional `ESPHOME_PASSWORD`) | No |
 
-Pass `--insecure` to disable authentication on the Cloudflare listener for local development; it has no effect on the tailnet listener, which is always gated by WhoIs. `LOG_LEVEL` (`debug`, `info`, `warn`, `error`) controls log verbosity.
+Pass `--insecure` to disable authentication on the Cloudflare listener for local development; it has no effect on the tailnet listener, which is always gated by WhoIs. `LOG_LEVEL` (`debug`, `info`, `warn`, `error`) controls log verbosity and `LOG_FORMAT` (`text`, `json`) the output format; use `json` when shipping logs to an aggregator.
 
 ### Guardrails & audit
 
