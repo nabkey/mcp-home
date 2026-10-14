@@ -13,7 +13,7 @@ func baselineQuestions() []replayQuestion {
 		}},
 		{"Did the garage close after we left?", []replayCall{
 			{"get_home_states", map[string]any{"search": "garage"}},
-			{"get_state_history", map[string]any{"entity_id": "cover.garage_doors_left_garage_door,cover.garage_doors_right_garage_door,person.chris_nabkey,person.brooke_nabkey,person.kenji", "hours": 24}},
+			{"get_state_history", map[string]any{"entity_id": "cover.garage_doors_left_garage_door,cover.garage_doors_right_garage_door,person.resident_a,person.resident_b,person.resident_c", "hours": 24}},
 		}},
 		{"Why was the heating on all night?", []replayCall{
 			{"get_home_states", map[string]any{"search": "heat"}},

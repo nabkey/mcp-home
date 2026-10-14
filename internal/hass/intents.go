@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -719,7 +720,8 @@ func (c *Client) HandleIntentAs(ctx context.Context, name string, slots map[stri
 
 	body, err := c.doRequest(ctx, "POST", "/api/intent/handle", nil, payload)
 	if err != nil {
-		if assistant != "" && strings.Contains(err.Error(), "status 400") && strings.Contains(err.Error(), "assistant") {
+		var apiErr *APIError
+		if assistant != "" && errors.As(err, &apiErr) && apiErr.Status == http.StatusBadRequest && strings.Contains(apiErr.Body, "assistant") {
 			return nil, errAssistantUnsupported
 		}
 		return nil, fmt.Errorf("handling intent %s: %w", name, err)
