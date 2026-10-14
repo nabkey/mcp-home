@@ -62,19 +62,19 @@ func TestMiddlewareCleansAllowlist(t *testing.T) {
 	noProfile := func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{Name: "orphan.tailnet.ts.net."}}, nil
 	}
-	h := newMiddleware(noProfile, discard(), []string{""}, []string{" "})(okHandler(t, false))
+	h := NewMiddleware(noProfile, discard(), []string{""}, []string{" "})(okHandler(t, false))
 	if rec := do(h, nil); rec.Code != http.StatusForbidden {
 		t.Errorf("empty-string login admitted a peer with no login: %d", rec.Code)
 	}
 
 	second := whoIsTagged("tag:b")
-	h = newMiddleware(second, discard(), nil, []string{"tag:a", " tag:b"})(okHandler(t, true))
+	h = NewMiddleware(second, discard(), nil, []string{"tag:a", " tag:b"})(okHandler(t, true))
 	if rec := do(h, nil); rec.Code != http.StatusNoContent {
 		t.Errorf("whitespace-padded tag did not match: %d", rec.Code)
 	}
 }
 
-func whoIsTagged(tags ...string) whoIsFunc {
+func whoIsTagged(tags ...string) WhoIsFunc {
 	return func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{
 			Node:        &tailcfg.Node{Name: "voice.tailnet.ts.net.", Tags: tags},
@@ -198,7 +198,7 @@ func TestMiddlewareUsesRemoteAddrOnly(t *testing.T) {
 }
 
 func TestMiddlewareWhoIsFailure(t *testing.T) {
-	for name, fn := range map[string]whoIsFunc{
+	for name, fn := range map[string]WhoIsFunc{
 		"error": func(context.Context, string) (*apitype.WhoIsResponse, error) {
 			return nil, errors.New("no such peer")
 		},
@@ -217,7 +217,7 @@ func TestMiddlewareWhoIsFailure(t *testing.T) {
 // node and a user.
 func TestMiddlewareEmptyAllowlistFailsClosed(t *testing.T) {
 	for _, lists := range [][2][]string{{nil, nil}, {{""}, {" ", ""}}} {
-		h := newMiddleware(whoIsTagged("tag:voice-agent"), discard(), lists[0], lists[1])(okHandler(t, false))
+		h := NewMiddleware(whoIsTagged("tag:voice-agent"), discard(), lists[0], lists[1])(okHandler(t, false))
 		if rec := do(h, nil); rec.Code != http.StatusForbidden {
 			t.Errorf("allowlist %q: status = %d, want 403", lists, rec.Code)
 		}

@@ -63,16 +63,16 @@ type Config struct {
 	Logger   *slog.Logger
 }
 
-// whoIsFunc resolves a remote address to its tailnet peer. It is the one
+// WhoIsFunc resolves a remote address to its tailnet peer. It is the one
 // tsnet call the middleware makes, split out so tests can supply identities
 // without a tailnet.
-type whoIsFunc func(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
+type WhoIsFunc func(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
 
 // Server wraps a running tsnet node.
 type Server struct {
 	ts     *tsnet.Server
 	lc     *local.Client
-	whoIs  whoIsFunc
+	whoIs  WhoIsFunc
 	logger *slog.Logger
 	// FQDN is the node's MagicDNS name, e.g. voice.tailnet.ts.net.
 	FQDN string
@@ -184,10 +184,12 @@ func (s *Server) Close() error { return s.ts.Close() }
 // header the client sent is irrelevant here (WhoIs already authenticated the
 // peer) and is replaced with a placeholder so the SDK's header parse passes.
 func (s *Server) Middleware(allowedLogins, allowedTags []string) func(http.Handler) http.Handler {
-	return newMiddleware(s.whoIs, s.logger, allowedLogins, allowedTags)
+	return NewMiddleware(s.whoIs, s.logger, allowedLogins, allowedTags)
 }
 
-func newMiddleware(whoIs whoIsFunc, logger *slog.Logger, allowedLogins, allowedTags []string) func(http.Handler) http.Handler {
+// NewMiddleware is Middleware with the WhoIs lookup supplied by the caller,
+// for wiring tests that have no tailnet.
+func NewMiddleware(whoIs WhoIsFunc, logger *slog.Logger, allowedLogins, allowedTags []string) func(http.Handler) http.Handler {
 	logins, tags := Clean(allowedLogins), Clean(allowedTags)
 	if len(logins) == 0 && len(tags) == 0 {
 		logger.Error("tailnet allowlist is empty: every tailnet request will be refused; set TS_ALLOWED_TAGS or TS_ALLOWED_LOGINS")
