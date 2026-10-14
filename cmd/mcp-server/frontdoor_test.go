@@ -437,6 +437,20 @@ func TestRunDoorsReportsCauseNotInterruption(t *testing.T) {
 	}
 }
 
+// SIGTERM while a door is still coming up (Cloudflare API retries, tsnet
+// login) is an orderly stop, not "refusing to start".
+func TestRunDoorsSignalDuringStartup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	slow := func(ctx context.Context, _ *errgroupGroup) error {
+		cancel()
+		<-ctx.Done()
+		return fmt.Errorf("tunnel setup interrupted: %w", ctx.Err())
+	}
+	if err := runDoors(ctx, slog.New(slog.DiscardHandler), []frontDoor{slow}); err != nil {
+		t.Errorf("runDoors = %v, want nil", err)
+	}
+}
+
 // SIGTERM is a clean stop.
 func TestRunDoorsSignalIsCleanExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

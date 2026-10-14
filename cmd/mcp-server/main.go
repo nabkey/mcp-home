@@ -106,8 +106,8 @@ type frontDoor func(ctx context.Context, g *errgroup.Group) error
 // If any door fails to come up the server refuses to start, but first stops
 // whatever the others already started: returning straight away would exit
 // the process with cloudflared or the tsnet node still running.
-func runDoors(ctx context.Context, logger *slog.Logger, doors []frontDoor) error {
-	ctx, cancel := context.WithCancel(ctx)
+func runDoors(parent context.Context, logger *slog.Logger, doors []frontDoor) error {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -129,6 +129,11 @@ func runDoors(ctx context.Context, logger *slog.Logger, doors []frontDoor) error
 		cancel()
 		if werr := g.Wait(); werr != nil {
 			logger.Debug("while stopping after a failed start", "error", werr)
+		}
+		if parent.Err() != nil {
+			// SIGTERM during startup: an orderly stop, not a failure.
+			logger.Info("stopped during startup", "reason", parent.Err())
+			return nil
 		}
 		return fmt.Errorf("refusing to start: %w", err)
 	}
