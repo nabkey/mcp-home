@@ -23,7 +23,7 @@ func baselineQuestions() []replayQuestion {
 			{"get_home_states", map[string]any{"search": "energy"}},
 			{"get_long_term_statistics", map[string]any{"statistic_ids": "sensor.275_greentree_energy_today,sensor.hotwater_heater_energy_today,sensor.dryer_energy_today,sensor.heat_pump_energy_today,sensor.electric_heater_energy_today,sensor.well_pump_energy_today,sensor.dishwasher_energy_today,sensor.oven_energy_today,sensor.garage_plugs_energy_today,sensor.kitchen_plugs_energy_today,sensor.balance_energy_today", "hours": 168, "period": "day"}},
 		}},
-		{"How warm is Norah's room?", []replayCall{
+		{"How warm is the nursery?", []replayCall{
 			{"get_home_states", map[string]any{"search": "temperature"}},
 		}},
 		{"Is the car charging?", []replayCall{
@@ -80,8 +80,8 @@ func liveQuestions() []replayQuestion {
 		{"What's using the most power this week?", []replayCall{
 			{"get_long_term_statistics", map[string]any{"search": "energy_today", "hours": 168}},
 		}},
-		{"How warm is Norah's room?", []replayCall{
-			{"get_home_states", map[string]any{"search": "norah", "device_class": "temperature"}},
+		{"How warm is the nursery?", []replayCall{
+			{"get_home_states", map[string]any{"search": "nursery", "device_class": "temperature"}},
 		}},
 		{"Is the car charging?", []replayCall{
 			{"get_home_states", map[string]any{"search": "charg"}},
