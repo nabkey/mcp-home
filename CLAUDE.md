@@ -58,7 +58,16 @@ The root `CLI.Validate` rejects a configuration with neither, so a server nobody
 
 `LOG_LEVEL` (debug/info/warn/error) controls slog verbosity; `LOG_FORMAT` (text/json, default text) picks the slog handler. Every tool call is audit-logged with the CF Access user via an MCP receiving middleware (`internal/server/audit.go`). All tools carry MCP annotations (`mcputil.ReadOnly/Destructive/Additive`); error results set `IsError`.
 
-Results are budgeted for a model's context, not a screen: `mcputil.JSONResult` emits compact JSON, and the list-shaped tools (`get_home_states`, `get_home_registry`, `list_home_services`, `list_esphome_devices`) return a slim projection by default (`internal/hass/slim.go`) with `attributes=true` / `full=true` / a `domain` for the raw record. Measured on a real instance, an unfiltered state dump was ~93k tokens and the full registry ~420k before this; the same calls are ~33k and ~71k now, and the filtered forms are hundreds. Keep new list tools on the same pattern.
+Results are budgeted for a model's context, not a screen: `mcputil.JSONResult` emits compact JSON, and the list-shaped tools (`get_home_states`, `get_home_registry`, `list_home_services`, `list_esphome_devices`) return a slim projection by default (`internal/hass/slim.go`, `states.go`) with `attributes=true` / `full=true` / a `domain` for the raw record. Keep new list tools on the same pattern.
+
+The HA read tools go further and are held to a budget: a common household question ("did the garage close after we left?", "what used the most energy this week?") is answered in at most two calls and ~5k tokens of tool output. `TestHouseholdQuestionBudget` (`internal/hass/budget_test.go`) holds a synthetic home shaped like a real one to that; `TestReplayLiveCaptures` reruns the question set (`questions_test.go`) against captures of a real instance when `HASS_REPLAY_DIR` points at them (captures are personal data and are never committed). Measured on the live instance (903 states, 1,562 registry entities, ~2,000 logbook entries a day): the slim unfiltered state dump was ~34k tokens and the slim registry ~74k (raw: ~71k and ~321k); unfiltered, both now return counts per domain/area (~200 and ~500 tokens). The 14 household questions went from ~114k tokens of output, three of them over budget (a day of logbook at ~74k, overnight power history at ~19k, energy-by-circuit at ~5.5k) and one dead end (a calendar 404), to ~7.9k with none over. How:
+
+- **Home context** (`context.go`): the time zone and the entity/device/area registries are cached per client for 5 minutes. Every timestamp is the home's local time with its offset, states carry their `area`, `search` matches area names, and `start`/`end` accept local times (`2026-10-13 22:00`).
+- **Diagnostic/config/hidden entities are left out by default** (~45% of states live: signal strength, firmware, restart buttons, network device trackers), reported as `omitted_diagnostic`, with `all=true` to include them; an explicit `entity_id` always includes them.
+- **History** (`history.go`): numeric series become time-weighted min/mean/max, bucketed to ~24 rows when long; state series become transitions plus `time_in_state`. `raw=true` returns the samples.
+- **Logbook** (`logbook.go`): array rows with each name listed once; in a whole-house view an entity with ≥6 entries folds into `frequent`; a filtered view folds only to fit the 100-row cap; every omission is counted.
+- **Statistics** (`statistics.go`): a window `total_change` (or mean/min/max) per statistic, local period starts instead of epoch ms, and `search=` ranks matching sensors by total, so "what used the most" is one call.
+- An empty or unfiltered result carries a `note` saying what to try next, and REST errors (`APIError`) say what the status means (bad token, integration not loaded, proxy down, login page instead of the API).
 
 Config struct definitions are in `internal/config/config.go`. Each optional group has `Enabled() bool` and `Validate() error` methods. Kong invokes `Validate()` on each embedded group during `Parse`, so a group enforces its all-or-nothing rule just by defining the method.
 
@@ -186,8 +195,8 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 
 | Tool | Description |
 |------|-------------|
-| `get_home_states` | Query entity states filtered by `domain`, `entity_id` or `search`; compact (id, state, name, unit) unless `attributes=true` |
-| `get_home_events` | Logbook entries for recent state changes |
+| `get_home_states` | Current states with area and local `last_changed`; `search` (id/name/area), `domain`, `entity_id`, `area`, `device_class`, `state` combine; no filter returns counts per domain/area; diagnostic/config entities need `all=true`; `attributes=true` for raw |
+| `get_home_events` | Logbook (state changes, automation triggers) over `hours` or `start`/`end`, filterable by `entity_id`/`domain`/`area`/`search`; chatty entities fold into `frequent` |
 | `call_home_service` | Call HA services (turn_on, turn_off, set_temperature, etc.) |
 | `get_todo_items` | Retrieve items from a todo list entity |
 | `manage_automations` | CRUD operations on automations (`delete` asks for confirmation on capable clients) |
@@ -195,20 +204,20 @@ Authentication: the server auto-discovers the CF Access team domain and applicat
 | `manage_helpers` | CRUD operations on helpers (input_boolean, input_number, input_text, input_select, input_datetime, input_button, counter, timer, schedule) |
 | `manage_scripts` | CRUD operations on scripts |
 | `manage_scenes` | CRUD plus `activate` for scenes |
-| `get_home_registry` | Topology data (areas, devices, entities, labels, floors); compact projection with entities inheriting their device's area, filterable by `area_id`/`domain`, `full=true` for raw records |
+| `get_home_registry` | Topology (areas, devices, entities, labels, floors); unfiltered `kind=all` gives per-area counts; `area_id` (id or name)/`domain` for records, entities inheriting their device's area; disabled and diagnostic entries need `all=true`; `full=true` for raw records |
 | `manage_registry` | Create/update/delete area/entity/device/label/floor registry entries (assign areas, rename, label) |
 | `execute_script` | Run an ad-hoc action sequence (HA script syntax) without storing a script |
-| `get_diagnostics` | Health/error diagnostics: error log, system health, repair issues, persistent notifications (`kind=all` by default) |
+| `get_diagnostics` | Health/error diagnostics: error log (the in-memory system log when there is no log file, as on HA OS), system health, open repair issues, persistent notifications (`kind=all` by default) |
 | `list_home_services` | Discover services before calling them: names-only index of all domains, or full field schemas for one `domain` (and optionally one `service`) |
-| `get_state_history` | Time-series state history for entities (numeric trends, on/off timelines) |
+| `get_state_history` | How entities changed over `hours` or `start`/`end`: numeric series as time-weighted min/mean/max (bucketed when long), state series as transitions plus time in each state; `raw=true` for samples |
 | `render_template` | Evaluate a Jinja2 template against current state for compound queries |
-| `get_long_term_statistics` | Long-term statistics (energy/gas/water/measurement sensors) aggregated by 5minute/hour/day/week/month |
-| `get_calendar_events` | Upcoming events from HA calendar entities (lists calendars when entity_id is omitted) |
+| `get_long_term_statistics` | Long-term statistics by `statistic_ids` (per-period rows) or `search` (window totals ranked); period defaults to fit the window |
+| `get_calendar_events` | Upcoming events from every calendar (or the given `entity_id`s), merged and sorted, local times |
 | `manage_dashboards` | List/read/save/delete Lovelace dashboard configs and create/update/delete storage dashboards (save_config overwrites the whole config; save_config/delete_config/delete ask for confirmation on capable clients) |
 | `manage_dashboard_resources` | CRUD for Lovelace dashboard resources (custom JS/CSS modules) |
 | `manage_entity_state` | Write or delete an entity's state directly in the state machine (virtual entities; does not control devices) |
 | `fire_home_event` | Fire an event on the event bus (triggers automations listening for it) |
-| `get_home_config` | Core config (version, unit system, time zone, location), loaded components, and `configuration.yaml` validation (`kind=check`) |
+| `get_home_config` | Core config (version, unit system, time zone, location; the component list only with `kind=components`), and `configuration.yaml` validation (`kind=check`) |
 
 **Generated tools** (requires HA; registered at startup from the live instance):
 
