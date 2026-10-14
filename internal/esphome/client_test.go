@@ -148,7 +148,7 @@ func TestWriteConfigUpdate(t *testing.T) {
 		gotContent, _ = c.Args["content"].(string)
 		sc.result(c.MessageID, nil)
 	})
-	created, err := newClient(t, srv.URL).WriteConfig(context.Background(), "pump.yaml", "x: 1\n")
+	created, err := newClient(t, srv.URL).WriteConfig(context.Background(), "pump.yaml", "x: 1\n", nil)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestWriteConfigCreateFallback(t *testing.T) {
 			t.Errorf("unexpected command %s", c.Command)
 		}
 	})
-	created, err := newClient(t, srv.URL).WriteConfig(context.Background(), "pump.yaml", "x: 1\n")
+	created, err := newClient(t, srv.URL).WriteConfig(context.Background(), "pump.yaml", "x: 1\n", nil)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -204,8 +204,8 @@ func TestValidateStreaming(t *testing.T) {
 	if res.ExitCode == nil || *res.ExitCode != 0 {
 		t.Errorf("exit code = %v, want 0", res.ExitCode)
 	}
-	if !strings.Contains(res.Output, "valid") {
-		t.Errorf("output = %q", res.Output)
+	if !strings.Contains(res.Output(), "valid") {
+		t.Errorf("output = %q", res.Output())
 	}
 }
 
@@ -229,15 +229,15 @@ func TestLogsTimeout(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	res, err := newClient(t, srv.URL).Logs(ctx, "pump.yaml", "OTA")
+	res, err := newClient(t, srv.URL).Logs(ctx, "pump.yaml", LogOptions{Port: "OTA"})
 	if err != nil {
 		t.Fatalf("Logs: %v", err)
 	}
 	if !res.TimedOut {
 		t.Error("expected TimedOut")
 	}
-	if !strings.Contains(res.Output, "booted") {
-		t.Errorf("expected captured output, got %q", res.Output)
+	if !strings.Contains(res.Output(), "booted") {
+		t.Errorf("expected captured output, got %q", res.Output())
 	}
 }
 
@@ -283,12 +283,12 @@ func TestDownloadBinary(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	data, file, err := newClient(t, srv.URL).DownloadBinary(context.Background(), "pump.yaml", true)
+	data, bin, err := newClient(t, srv.URL).DownloadBinary(context.Background(), "pump.yaml", true)
 	if err != nil {
 		t.Fatalf("DownloadBinary: %v", err)
 	}
-	if file != "pool-pump.factory.bin" {
-		t.Errorf("file = %q", file)
+	if bin.File != "pool-pump.factory.bin" {
+		t.Errorf("file = %q", bin.File)
 	}
 	if len(data) != 4 || data[0] != 0xE9 {
 		t.Errorf("unexpected data: %v", data)
@@ -469,7 +469,13 @@ func TestJobLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("JobLog: %v", err)
 	}
-	if !strings.Contains(log, "was not declared") {
-		t.Errorf("log missing error line: %q", log)
+	if !strings.Contains(log.Output(), "was not declared") {
+		t.Errorf("log missing error line: %q", log.Output())
+	}
+	if len(log.Errors) != 1 || !strings.Contains(log.Errors[0], "was not declared") {
+		t.Errorf("errors = %q", log.Errors)
+	}
+	if !log.Final || log.ExitCode == nil || *log.ExitCode != 1 {
+		t.Errorf("terminal = final %v exit %v", log.Final, log.ExitCode)
 	}
 }
