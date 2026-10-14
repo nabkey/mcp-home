@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nabkey/mcp-home/internal/middleware"
 )
 
 // NewHTTPHandler wraps srv in the streamable HTTP transport that fronts the
@@ -28,8 +29,12 @@ import (
 // round-trip input request rather than sent as a request, which is exactly
 // the form stateless mode allows. The visible cost is that GET returns 405,
 // so /mcp/sse serves POST only.
+//
+// Responses are marked private, no-store at the HTTP layer (middleware.NoStore):
+// the cacheScope "private" hint on tools/list only binds MCP-aware clients,
+// and the SDK's own "no-cache" would let a shared HTTP cache store a response.
 func NewHTTPHandler(srv *mcp.Server, logger *slog.Logger) http.Handler {
-	return mcp.NewStreamableHTTPHandler(
+	return middleware.NoStore(mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return srv },
 		&mcp.StreamableHTTPOptions{
 			Logger: logger,
@@ -49,5 +54,5 @@ func NewHTTPHandler(srv *mcp.Server, logger *slog.Logger) http.Handler {
 			// Cloudflare Access OAuth is the actual gate; see SECURITY.md.
 			DisableLocalhostProtection: true,
 		},
-	)
+	))
 }

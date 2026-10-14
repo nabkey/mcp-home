@@ -66,7 +66,7 @@ func TestEnabled(t *testing.T) {
 var cliEnv = []string{
 	"CF_API_TOKEN", "CF_ACCOUNT_ID", "CF_ZONE_ID", "CF_HOSTNAME", "CF_TUNNEL_NAME",
 	"TS_AUTHKEY", "TS_HOSTNAME", "TS_STATE_DIR", "TS_ALLOWED_TAGS", "TS_ALLOWED_LOGINS",
-	"INSECURE", "LOG_LEVEL",
+	"INSECURE", "LOG_LEVEL", "LOG_FORMAT",
 	"HASS_URL", "HASS_TOKEN", "HASS_DENY_SERVICES",
 	"SONARR_URL", "SONARR_API_KEY",
 	"RADARR_URL", "RADARR_API_KEY",
@@ -144,7 +144,7 @@ func TestParseAcceptsCompleteGroups(t *testing.T) {
 }
 
 func TestCloudflareConfigValidate(t *testing.T) {
-	full := CloudflareConfig{APIToken: "t", AccountID: "a", ZoneID: "z", Hostname: "h"}
+	full := CloudflareConfig{APIToken: "t", AccountID: "a", ZoneID: "z", Hostname: "h.example.com"}
 	if err := full.Validate(); err != nil {
 		t.Errorf("full config: %v", err)
 	}
@@ -234,5 +234,63 @@ func TestParseRejectsTailnetWithoutAllowlist(t *testing.T) {
 	t.Setenv("TS_ALLOWED_TAGS", "")
 	if err := parse(t); err == nil {
 		t.Fatal("expected parse to reject TS_AUTHKEY with an empty allowlist")
+	}
+}
+
+// Kong turns "," into [""] and " " into [" "]: one entry each, which the old
+// length check counted as an allowlist. Neither names anyone.
+func TestParseRejectsBlankAllowlistEntries(t *testing.T) {
+	for _, v := range []string{",", " ", " , ", ",,"} {
+		clearEnv(t)
+		t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+		t.Setenv("TS_ALLOWED_TAGS", v)
+		t.Setenv("TS_ALLOWED_LOGINS", v)
+		if err := parse(t); err == nil {
+			t.Errorf("allowlist %q accepted", v)
+		}
+	}
+}
+
+// Mistakes that would silently refuse the intended device must name the entry.
+func TestParseRejectsMalformedAllowlistEntries(t *testing.T) {
+	cases := []struct{ env, value, want string }{
+		{"TS_ALLOWED_TAGS", "voice-agent", "tag:name"},
+		{"TS_ALLOWED_TAGS", "tag:", "tag:name"},
+		{"TS_ALLOWED_LOGINS", "tag:voice-agent", "TS_ALLOWED_TAGS"},
+		{"TS_ALLOWED_LOGINS", "chris @example.com", "whitespace"},
+	}
+	for _, c := range cases {
+		clearEnv(t)
+		t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+		if c.env == "TS_ALLOWED_LOGINS" {
+			t.Setenv("TS_ALLOWED_TAGS", "")
+		}
+		t.Setenv(c.env, c.value)
+		err := parse(t)
+		if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), c.env) {
+			t.Errorf("%s=%q: err = %v, want one naming %s and %q", c.env, c.value, err, c.env, c.want)
+		}
+	}
+}
+
+// Whitespace after a comma is what people type; the middleware trims it, so
+// validation must accept it too.
+func TestParseAcceptsPaddedAllowlist(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("TS_AUTHKEY", "tskey-auth-test")
+	t.Setenv("TS_ALLOWED_TAGS", "tag:voice-agent, tag:laptop")
+	if err := parse(t); err != nil {
+		t.Errorf("parse() = %v", err)
+	}
+}
+
+func TestParseRejectsMalformedHostname(t *testing.T) {
+	for _, h := range []string{"https://mcp.example.com", "mcp.example.com/mcp", "mcp.example.com:443", "mcp.example.com.", "localhost", " mcp.example.com"} {
+		setCloudflare(t)
+		t.Setenv("CF_HOSTNAME", h)
+		err := parse(t)
+		if err == nil || !strings.Contains(err.Error(), "CF_HOSTNAME") {
+			t.Errorf("CF_HOSTNAME=%q: err = %v, want one naming CF_HOSTNAME", h, err)
+		}
 	}
 }

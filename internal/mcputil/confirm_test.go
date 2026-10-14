@@ -2,8 +2,10 @@ package mcputil
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -79,14 +81,103 @@ func TestConfirmProceedsWithoutSession(t *testing.T) {
 	}
 }
 
+var yes = mcp.InputResponseMap{
+	confirmKey: &mcp.ElicitResult{Action: "accept", Content: map[string]any{confirmKey: true}},
+}
+
+// ask runs the first round for a call with args and returns the requestState
+// the server handed out.
+func ask(t *testing.T, ss *mcp.ServerSession, args string) string {
+	t.Helper()
+	req := callReq(ss, nil)
+	req.Params.Arguments = json.RawMessage(args)
+	ok, res := Confirm(req, "Flash pump.yaml")
+	if ok || res == nil || res.RequestState == "" {
+		t.Fatalf("first round: ok=%v res=%+v, want a question with requestState", ok, res)
+	}
+	return res.RequestState
+}
+
+func retry(ss *mcp.ServerSession, args, state string) *mcp.CallToolRequest {
+	req := callReq(ss, yes)
+	req.Params.Arguments = json.RawMessage(args)
+	req.Params.RequestState = state
+	return req
+}
+
 func TestConfirmAccept(t *testing.T) {
 	ss := connect(t, withElicitation())
-	ok, res := Confirm(callReq(ss, mcp.InputResponseMap{
-		confirmKey: &mcp.ElicitResult{Action: "accept", Content: map[string]any{confirmKey: true}},
-	}), "Flash pump.yaml")
+	state := ask(t, ss, `{"file":"pump.yaml","force":true}`)
 
+	// Same arguments, re-serialized in another key order and spacing.
+	ok, res := Confirm(retry(ss, `{ "force": true, "file": "pump.yaml" }`, state), "Flash pump.yaml")
 	if !ok || res != nil {
 		t.Errorf("ok=%v res=%+v, want proceed after accept", ok, res)
+	}
+	if got := ConfirmationAnswer(retry(ss, `{"file":"pump.yaml","force":true}`, state).Params); got != "accepted" {
+		t.Errorf("ConfirmationAnswer = %q, want accepted", got)
+	}
+}
+
+// A yes the server never asked for, or one carried over to a call whose
+// arguments changed, must not count: the user agreed to flash pump.yaml, not
+// garage.yaml. The client is asked again instead.
+func TestConfirmRejectsUnboundAccept(t *testing.T) {
+	ss := connect(t, withElicitation())
+	state := ask(t, ss, `{"file":"pump.yaml"}`)
+
+	cases := map[string]*mcp.CallToolRequest{
+		"no state (pre-answered)": retry(ss, `{"file":"pump.yaml"}`, ""),
+		"garbage state":           retry(ss, `{"file":"pump.yaml"}`, "AAAA"),
+		"different arguments":     retry(ss, `{"file":"garage.yaml"}`, state),
+		"different tool": func() *mcp.CallToolRequest {
+			r := retry(ss, `{"file":"pump.yaml"}`, state)
+			r.Params.Name = "y"
+			return r
+		}(),
+		"state tampered": retry(ss, `{"file":"pump.yaml"}`, state[:len(state)-2]+"AA"),
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			ok, res := Confirm(req, "Flash pump.yaml")
+			if ok {
+				t.Fatal("proceeded on an unbound yes")
+			}
+			if res == nil || res.InputRequests[confirmKey] == nil {
+				t.Errorf("res = %+v, want the question asked again", res)
+			}
+			if got := ConfirmationAnswer(req.Params); got != "accepted_unverified" {
+				t.Errorf("ConfirmationAnswer = %q, want accepted_unverified", got)
+			}
+		})
+	}
+}
+
+func TestConfirmStateExpires(t *testing.T) {
+	ss := connect(t, withElicitation())
+	state := ask(t, ss, `{}`)
+	defer func(orig func() time.Time) { confirmNow = orig }(confirmNow)
+	confirmNow = func() time.Time { return time.Now().Add(confirmTTL + time.Minute) }
+	if ok, _ := Confirm(retry(ss, `{}`, state), "x"); ok {
+		t.Error("expired confirmation honoured")
+	}
+}
+
+// A new secret (a restart without SetConfirmSecret) invalidates outstanding
+// answers; the same derived secret keeps them valid.
+func TestConfirmSecretAcrossRestart(t *testing.T) {
+	ss := connect(t, withElicitation())
+	defer func(orig []byte) { confirmMu.Lock(); confirmSecret = orig; confirmMu.Unlock() }(confirmSecret)
+
+	SetConfirmSecret([]byte("stable"))
+	state := ask(t, ss, `{}`)
+	SetConfirmSecret([]byte("stable"))
+	if ok, _ := Confirm(retry(ss, `{}`, state), "x"); !ok {
+		t.Error("answer lost across a restart with the same secret")
+	}
+	SetConfirmSecret([]byte("rotated"))
+	if ok, _ := Confirm(retry(ss, `{}`, state), "x"); ok {
+		t.Error("answer honoured under a different secret")
 	}
 }
 

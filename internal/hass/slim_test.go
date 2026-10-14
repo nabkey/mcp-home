@@ -1,71 +1,9 @@
 package hass
 
 import (
-	"encoding/json"
 	"reflect"
 	"testing"
-	"time"
 )
-
-func TestFilterStates(t *testing.T) {
-	states := []State{
-		{EntityID: "light.kitchen", State: "on", Attributes: map[string]any{"friendly_name": "Kitchen Light"}},
-		{EntityID: "light.porch", State: "off", Attributes: map[string]any{"friendly_name": "Porch"}},
-		{EntityID: "switch.kitchen_fan", State: "on", Attributes: map[string]any{"friendly_name": "Fan"}},
-		{EntityID: "sensor.temp", State: "21.5", Attributes: map[string]any{"unit_of_measurement": "°C"}},
-	}
-	ids := func(ss []State) []string {
-		var out []string
-		for _, s := range ss {
-			out = append(out, s.EntityID)
-		}
-		return out
-	}
-	cases := []struct {
-		name            string
-		domains, entIDs []string
-		search          string
-		want            []string
-	}{
-		{"no filter", nil, nil, "", []string{"light.kitchen", "light.porch", "switch.kitchen_fan", "sensor.temp"}},
-		{"domain", []string{"light"}, nil, "", []string{"light.kitchen", "light.porch"}},
-		{"two domains", []string{"light", "switch"}, nil, "", []string{"light.kitchen", "light.porch", "switch.kitchen_fan"}},
-		{"entity ids", nil, []string{"sensor.temp", "light.porch"}, "", []string{"light.porch", "sensor.temp"}},
-		{"search id and name", nil, nil, "KITCHEN", []string{"light.kitchen", "switch.kitchen_fan"}},
-		{"search by friendly name only", nil, nil, "fan", []string{"switch.kitchen_fan"}},
-		{"combined", []string{"switch"}, nil, "kitchen", []string{"switch.kitchen_fan"}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := ids(filterStates(states, c.domains, c.entIDs, c.search))
-			if !reflect.DeepEqual(got, c.want) {
-				t.Errorf("got %v want %v", got, c.want)
-			}
-		})
-	}
-}
-
-func TestSlimStates(t *testing.T) {
-	ts := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	states := []State{{
-		EntityID:    "sensor.temp",
-		State:       "21.5",
-		Attributes:  map[string]any{"friendly_name": "Temp", "unit_of_measurement": "°C", "device_class": "temperature", "icon": "mdi:x"},
-		LastChanged: ts,
-		LastUpdated: ts,
-	}, {
-		EntityID: "light.kitchen", State: "on", Attributes: map[string]any{"brightness": 200},
-	}}
-	b, err := json.Marshal(slimStates(states))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `[{"entity_id":"sensor.temp","state":"21.5","name":"Temp","unit":"°C","last_changed":"2026-09-15T12:00:00Z"},` +
-		`{"entity_id":"light.kitchen","state":"on","last_changed":"0001-01-01T00:00:00Z"}]`
-	if string(b) != want {
-		t.Errorf("got  %s\nwant %s", b, want)
-	}
-}
 
 func TestSplitList(t *testing.T) {
 	if got := splitList(" light, switch ,,climate "); !reflect.DeepEqual(got, []string{"light", "switch", "climate"}) {

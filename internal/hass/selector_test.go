@@ -404,3 +404,90 @@ func TestServiceFieldsToSchemaCollapsedGroupDoesNotShadow(t *testing.T) {
 		}
 	}
 }
+
+// fieldsSchema runs ServiceFieldsToSchema on a JSON fields fixture and
+// returns its wire form plus a validator for the resolved schema.
+func fieldsSchema(t *testing.T, raw string) (map[string]any, func(map[string]any) error) {
+	t.Helper()
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		t.Fatalf("bad fields fixture: %v", err)
+	}
+	s := ServiceFieldsToSchema(fields)
+	resolved, err := s.Resolve(nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	return schemaJSON(t, s), func(args map[string]any) error { return resolved.Validate(args) }
+}
+
+// A select with custom_value accepts values outside its options (a script
+// field like "playlist" with a few suggestions). Advertising the options as
+// an enum made the generated tool reject exactly the values the script was
+// built to take, because generated tools validate their own input.
+func TestServiceFieldsSelectCustomValueAcceptsOtherValues(t *testing.T) {
+	got, validate := fieldsSchema(t, `{"playlist": {"required": true, "selector": {"select": {"custom_value": true, "options": ["Focus", "Chill"]}}}}`)
+	if err := validate(map[string]any{"playlist": "Relaxing Massage"}); err != nil {
+		t.Errorf("custom value rejected: %v", err)
+	}
+	p := got["properties"].(map[string]any)["playlist"].(map[string]any)
+	if _, ok := p["enum"]; ok {
+		t.Errorf("custom_value select advertised an enum: %v", p)
+	}
+	if d, _ := p["description"].(string); !contains(d, "Focus") || !contains(d, "Chill") {
+		t.Errorf("suggestions lost from description: %q", d)
+	}
+}
+
+// Select options carry a label the model needs to map words to values
+// ("Lamps Only: Red" -> "lamps_red"); the enum keeps only the value.
+func TestServiceFieldsSelectLabelsSurviveInDescription(t *testing.T) {
+	got, validate := fieldsSchema(t, `{"mode": {"name": "Mode", "selector": {"select": {"options": [{"value": "lamps_red", "label": "Lamps Only: Red"}, {"value": "off", "label": "All off"}]}}}}`)
+	p := got["properties"].(map[string]any)["mode"].(map[string]any)
+	if d, _ := p["description"].(string); !contains(d, "lamps_red = Lamps Only: Red") {
+		t.Errorf("labels missing from description: %q", d)
+	}
+	if err := validate(map[string]any{"mode": "Lamps Only: Red"}); err == nil {
+		t.Error("a label is not a value; the enum should still reject it")
+	}
+}
+
+// The action selector takes a list of action objects, like condition. As a
+// string, the only shape Home Assistant accepts could not be expressed.
+func TestSelectorToSchemaAction(t *testing.T) {
+	got := selectorJSON(t, `{"action": {}}`)
+	if got["type"] != "array" {
+		t.Fatalf("type = %v, want array", got["type"])
+	}
+	items, _ := got["items"].(map[string]any)
+	if items["type"] != "object" {
+		t.Errorf("items = %v, want objects", items)
+	}
+}
+
+// Units and entity filters are what turn "15" into the right number and
+// "the porch light" into the right entity id; a default tells the model
+// what omitting the field does.
+func TestServiceFieldsUnitsFiltersAndDefaults(t *testing.T) {
+	got, _ := fieldsSchema(t, `{
+		"minutes": {"name": "Duration", "default": 10, "selector": {"number": {"min": 1, "max": 120, "unit_of_measurement": "min"}}},
+		"light": {"name": "Light", "selector": {"entity": {"filter": [{"domain": "light"}]}}},
+		"room": {"name": "Room", "selector": {"area": {}}}
+	}`)
+	props := got["properties"].(map[string]any)
+	minutes := props["minutes"].(map[string]any)
+	if d, _ := minutes["description"].(string); !contains(d, "(min)") || !contains(d, "Duration") {
+		t.Errorf("unit missing: %q", d)
+	}
+	if minutes["default"] != 10.0 {
+		t.Errorf("default = %v, want 10", minutes["default"])
+	}
+	light := props["light"].(map[string]any)
+	if d, _ := light["description"].(string); !contains(d, "light.") {
+		t.Errorf("entity domain filter missing: %q", d)
+	}
+	room := props["room"].(map[string]any)
+	if room["format"] != "area_id" {
+		t.Errorf("area selector format = %v, want area_id", room["format"])
+	}
+}

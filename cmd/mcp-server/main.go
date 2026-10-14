@@ -4,14 +4,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"github.com/nabkey/mcp-home/internal/cfaccess"
+	"github.com/nabkey/mcp-home/internal/cfapi"
 	"github.com/nabkey/mcp-home/internal/config"
 	"github.com/nabkey/mcp-home/internal/middleware"
 	"github.com/nabkey/mcp-home/internal/server"
@@ -29,6 +31,12 @@ import (
 
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
+
+// drainTimeout is how long a listener keeps serving in-flight requests after
+// shutdown starts. It matches cloudflared's grace period, so a request that
+// is mid-flight through the tunnel can still be answered, and both fit in
+// Docker's default 10s stop timeout.
+const drainTimeout = tunnel.GracePeriod
 
 func main() {
 	var cli config.CLI
@@ -42,8 +50,12 @@ func main() {
 	logger.Info("mcp-server starting", "version", version, "log_level", cli.LogLevel, "log_format", cli.LogFormat)
 
 	if err := run(cli, logger); err != nil {
-		log.Fatal(err)
+		// Through the logger, not log.Fatal, so the reason for exiting is a
+		// structured record in the same format as everything else.
+		logger.Error("mcp-server exiting", "error", err)
+		os.Exit(1)
 	}
+	logger.Info("mcp-server stopped")
 }
 
 // newLogger builds the process logger. Kong's enum tags guarantee both
@@ -66,22 +78,84 @@ func run(cli config.CLI, logger *slog.Logger) error {
 	srv := server.New(ctx, cli, version, logger)
 	handler := server.NewHTTPHandler(srv, logger)
 
-	// Each front door runs in the group; the first to fail (or the signal
-	// context) takes the rest down. Config validation guarantees at least
-	// one is enabled.
-	g, gctx := errgroup.WithContext(ctx)
-
+	var doors []frontDoor
 	if cli.Cloudflare.Enabled() {
-		if err := serveCloudflare(gctx, g, cli, handler, logger); err != nil {
-			return err
-		}
+		doors = append(doors, func(ctx context.Context, g *errgroup.Group) error {
+			return serveCloudflare(ctx, g, cli, handler, logger)
+		})
+	} else if cli.Insecure {
+		logger.Warn("--insecure has no effect: the Cloudflare front door is not configured, and it never applies to the tailnet")
 	}
 	if cli.Tailscale.Enabled() {
-		if err := serveTailnet(gctx, g, cli, handler, logger); err != nil {
-			return err
+		doors = append(doors, func(ctx context.Context, g *errgroup.Group) error {
+			return serveTailnet(ctx, g, cli, handler, logger)
+		})
+	}
+	return runDoors(ctx, logger, doors)
+}
+
+// frontDoor sets up one listener. It returns once the door is serving,
+// having added its long-running pieces to g, or with an error if it could
+// not be brought up.
+type frontDoor func(ctx context.Context, g *errgroup.Group) error
+
+// runDoors brings every front door up concurrently, so a slow one (Cloudflare
+// API retries, a tailnet login) does not hold up the other, then serves
+// until ctx ends or a running piece fails.
+//
+// If any door fails to come up the server refuses to start, but first stops
+// whatever the others already started: returning straight away would exit
+// the process with cloudflared or the tsnet node still running.
+func runDoors(parent context.Context, logger *slog.Logger, doors []frontDoor) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	g, gctx := errgroup.WithContext(ctx)
+
+	errs := make([]error, len(doors))
+	var wg sync.WaitGroup
+	for i, door := range doors {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := door(gctx, g); err != nil {
+				errs[i] = err
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if err := firstCause(errs); err != nil {
+		cancel()
+		if werr := g.Wait(); werr != nil {
+			logger.Debug("while stopping after a failed start", "error", werr)
 		}
+		if parent.Err() != nil {
+			// SIGTERM during startup: an orderly stop, not a failure.
+			logger.Info("stopped during startup", "reason", parent.Err())
+			return nil
+		}
+		return fmt.Errorf("refusing to start: %w", err)
 	}
 	return g.Wait()
+}
+
+// firstCause picks the error that caused a failed start. Doors interrupted
+// because another one failed report a cancellation; that is not the cause.
+func firstCause(errs []error) error {
+	var fallback error
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, context.Canceled) {
+			return err
+		}
+		if fallback == nil {
+			fallback = err
+		}
+	}
+	return fallback
 }
 
 // healthHandler answers /health on every listener. It is unauthenticated on
@@ -91,8 +165,11 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
-// serveHTTP runs srv on ln in the group and shuts it down when ctx ends.
-func serveHTTP(ctx context.Context, g *errgroup.Group, srv *http.Server, ln net.Listener, name string) {
+// serveHTTP runs srv on ln in the group. When ctx ends it stops accepting
+// connections, lets in-flight requests finish for up to drainTimeout, and
+// then calls each of after in order — the place to tear down whatever
+// carries the traffic (the tsnet node), which must outlive the drain.
+func serveHTTP(ctx context.Context, g *errgroup.Group, srv *http.Server, ln net.Listener, name string, logger *slog.Logger, after ...func()) {
 	g.Go(func() error {
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			return fmt.Errorf("%s http server: %w", name, err)
@@ -101,95 +178,142 @@ func serveHTTP(ctx context.Context, g *errgroup.Group, srv *http.Server, ln net.
 	})
 	g.Go(func() error {
 		<-ctx.Done()
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), drainTimeout)
 		defer shutdownCancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("in-flight requests did not finish before the drain timeout", "listener", name, "timeout", drainTimeout, "error", err)
+			_ = srv.Close()
+		}
+		for _, f := range after {
+			f()
+		}
 		return nil
+	})
+}
+
+// newServer builds the http.Server for a listener.
+func newServer(h http.Handler, name string, logger *slog.Logger) *http.Server {
+	return &http.Server{
+		Handler:           middleware.Logging(logger.With("listener", name))(h),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+}
+
+// cloudflareMux builds the routes for the Cloudflare listener. verifier nil
+// means --insecure: /mcp is served without validation (and audited as
+// anonymous on the insecure door).
+func cloudflareMux(handler http.Handler, verifier auth.TokenVerifier, hostname, authServerURL string) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthHandler)
+
+	if verifier == nil {
+		gate := insecureIdentity
+		mux.Handle("/mcp", gate(handler))
+		mux.Handle("/mcp/sse", gate(handler))
+		return mux
+	}
+
+	resourceURL := "https://" + hostname + "/mcp"
+	metadataURL := "https://" + hostname + "/.well-known/oauth-protected-resource"
+
+	// Serve OAuth 2.0 Protected Resource Metadata (RFC 9728) so clients
+	// can discover Cloudflare Access as the authorization server.
+	// Mount at both the base path and the /mcp-suffixed path per the MCP spec
+	// (clients try the path-suffixed version first for non-root MCP endpoints).
+	metadataHandler := auth.ProtectedResourceMetadataHandler(
+		&oauthex.ProtectedResourceMetadata{
+			Resource:               resourceURL,
+			AuthorizationServers:   []string{authServerURL},
+			BearerMethodsSupported: []string{"header"},
+		},
+	)
+	mux.Handle("/.well-known/oauth-protected-resource", metadataHandler)
+	mux.Handle("/.well-known/oauth-protected-resource/mcp", metadataHandler)
+
+	// Protect MCP endpoints with Bearer token validation.
+	// Unauthenticated requests get 401 + WWW-Authenticate header pointing
+	// to the protected resource metadata, enabling OAuth discovery.
+	authMW := auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{
+		ResourceMetadataURL: metadataURL,
+	})
+	mux.Handle("/mcp", cfAccessBridge(authMW(handler)))
+	mux.Handle("/mcp/sse", cfAccessBridge(authMW(handler)))
+	return mux
+}
+
+// cfAccessBridge copies Cf-Access-Jwt-Assertion into Authorization: Bearer
+// when the request has no Authorization header. Cloudflare Access injects
+// the JWT in its own header; the go-sdk middleware reads the standard one.
+// Either way the token is validated in full, so a client choosing which
+// header to send gains nothing.
+func cfAccessBridge(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			if cfJWT := r.Header.Get("Cf-Access-Jwt-Assertion"); cfJWT != "" {
+				r.Header.Set("Authorization", "Bearer "+cfJWT)
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// insecureIdentity records an explicit anonymous identity on the insecure
+// door, so its calls are audited as front_door=cloudflare-insecure rather
+// than indistinguishable from a request that slipped past authentication.
+func insecureIdentity(next http.Handler) http.Handler {
+	record := auth.RequireBearerToken(func(context.Context, string, *http.Request) (*auth.TokenInfo, error) {
+		return &auth.TokenInfo{UserID: "anonymous", Extra: map[string]any{cfaccess.FrontDoorKey: "cloudflare-insecure"}}, nil
+	}, &auth.RequireBearerTokenOptions{AllowMissingExpiration: true})(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("Authorization", "Bearer insecure")
+		record.ServeHTTP(w, r)
 	})
 }
 
 // serveCloudflare binds a localhost listener, gates /mcp with Cloudflare
 // Access JWT validation (unless --insecure), and runs the tunnel that
-// publishes it. cloudflared is the long-running piece: it stays in the group
-// until the context ends or it exits on its own.
+// publishes it. cloudflared is supervised: if it exits it is restarted
+// (after re-running tunnel setup) rather than taking the process down.
 func serveCloudflare(ctx context.Context, g *errgroup.Group, cli config.CLI, handler http.Handler, logger *slog.Logger) error {
+	// Find (or fetch) cloudflared before touching the Cloudflare API, so a
+	// host that cannot run it fails at boot with that, not minutes later.
+	binary, err := tunnel.EnsureCloudflared(ctx, logger)
+	if err != nil {
+		return fmt.Errorf("cloudflared not available: %w (install it on PATH, or allow the host to download it from github.com)", err)
+	}
+
+	var verifier auth.TokenVerifier
+	authServerURL := ""
+	if cli.Insecure {
+		logger.Warn("INSECURE MODE: OAuth Bearer token validation disabled — tunnel MCP endpoints are unauthenticated")
+	} else {
+		// Auto-discover Access team and application AUD from the Cloudflare API.
+		// Transient API failures are retried so a blip at boot does not
+		// crash-loop the server (taking the tailnet door down with it).
+		var accessCfg *cfaccess.Config
+		err := cfapi.Retry(ctx, 5, 2*time.Second, logger, "Access discovery", func() error {
+			var derr error
+			accessCfg, derr = cfaccess.Discover(ctx, cli.Cloudflare.APIToken, cli.Cloudflare.AccountID, cli.Cloudflare.Hostname, logger)
+			return derr
+		})
+		if err != nil {
+			return fmt.Errorf("cloudflare access: %w", err)
+		}
+		verifier = cfaccess.New(accessCfg.Team, accessCfg.AUD, logger).TokenVerifier()
+		authServerURL = "https://" + accessCfg.Team + ".cloudflareaccess.com"
+		logger.Info("OAuth Bearer token validation enabled", "team", accessCfg.Team, "auth_server", authServerURL)
+	}
+
 	// Random localhost port: only cloudflared, on this host, needs to reach it.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	addr := listener.Addr().String()
-	logger.Info("starting MCP HTTP server", "addr", addr)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
-
-	if cli.Insecure {
-		logger.Warn("INSECURE MODE: OAuth Bearer token validation disabled — tunnel MCP endpoints are unauthenticated")
-		mux.Handle("/mcp", handler)
-		mux.Handle("/mcp/sse", handler)
-	} else {
-		// Auto-discover Access team and MCP Portal AUD from the Cloudflare API.
-		accessCfg, err := cfaccess.Discover(ctx, cli.Cloudflare.APIToken, cli.Cloudflare.AccountID, cli.Cloudflare.Hostname, logger)
-		if err != nil {
-			return fmt.Errorf("cloudflare access: %w (pass --insecure to bypass)", err)
-		}
-
-		validator := cfaccess.New(accessCfg.Team, accessCfg.AUD, logger)
-		authServerURL := "https://" + accessCfg.Team + ".cloudflareaccess.com"
-		resourceURL := "https://" + cli.Cloudflare.Hostname + "/mcp"
-		metadataURL := "https://" + cli.Cloudflare.Hostname + "/.well-known/oauth-protected-resource"
-
-		// Serve OAuth 2.0 Protected Resource Metadata (RFC 9728) so clients
-		// can discover Cloudflare Access as the authorization server.
-		// Mount at both the base path and the /mcp-suffixed path per the MCP spec
-		// (clients try the path-suffixed version first for non-root MCP endpoints).
-		metadataHandler := auth.ProtectedResourceMetadataHandler(
-			&oauthex.ProtectedResourceMetadata{
-				Resource:               resourceURL,
-				AuthorizationServers:   []string{authServerURL},
-				BearerMethodsSupported: []string{"header"},
-			},
-		)
-		mux.Handle("/.well-known/oauth-protected-resource", metadataHandler)
-		mux.Handle("/.well-known/oauth-protected-resource/mcp", metadataHandler)
-
-		// Protect MCP endpoints with Bearer token validation.
-		// Unauthenticated requests get 401 + WWW-Authenticate header pointing
-		// to the protected resource metadata, enabling OAuth discovery.
-		authMW := auth.RequireBearerToken(validator.TokenVerifier(), &auth.RequireBearerTokenOptions{
-			ResourceMetadataURL: metadataURL,
-		})
-		// Bridge CF Access → OAuth: if the request has Cf-Access-Jwt-Assertion
-		// but no Authorization header, copy the JWT into Authorization: Bearer.
-		// This handles the CF Access edge injecting auth in its own header format.
-		cfAccessBridge := func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") == "" {
-					if cfJWT := r.Header.Get("Cf-Access-Jwt-Assertion"); cfJWT != "" {
-						r.Header.Set("Authorization", "Bearer "+cfJWT)
-					}
-				}
-				next.ServeHTTP(w, r)
-			})
-		}
-		mux.Handle("/mcp", cfAccessBridge(authMW(handler)))
-		mux.Handle("/mcp/sse", cfAccessBridge(authMW(handler)))
-
-		logger.Info("OAuth Bearer token validation enabled",
-			"team", accessCfg.Team,
-			"auth_server", authServerURL,
-			"resource", resourceURL,
-		)
-	}
-
-	serveHTTP(ctx, g, &http.Server{
-		Handler:           middleware.Logging(logger)(mux),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}, listener, "tunnel")
-
-	// Set up the Cloudflare Tunnel.
+	// Set up the Cloudflare Tunnel before serving, so a setup failure does
+	// not leave a listener behind.
 	tun, err := tunnel.Setup(ctx, tunnel.Config{
 		APIToken:   cli.Cloudflare.APIToken,
 		AccountID:  cli.Cloudflare.AccountID,
@@ -198,26 +322,37 @@ func serveCloudflare(ctx context.Context, g *errgroup.Group, cli config.CLI, han
 		TunnelName: cli.Cloudflare.TunnelName,
 		LocalAddr:  "http://" + addr,
 		Logger:     logger,
+		Binary:     binary,
 	})
 	if err != nil {
+		_ = listener.Close()
 		return fmt.Errorf("tunnel setup: %w", err)
 	}
-	logger.Info("MCP server available", "url", "https://"+cli.Cloudflare.Hostname+"/mcp")
 
-	// Run cloudflared — blocks until the context is cancelled or it exits.
-	// A clean exit while the context is still live means the tunnel is gone
-	// with nobody having asked; surface it so the group shuts down rather
-	// than serving a listener nothing can reach.
+	logger.Info("starting MCP HTTP server", "addr", addr)
+	serveHTTP(ctx, g, newServer(cloudflareMux(handler, verifier, cli.Cloudflare.Hostname, authServerURL), "tunnel", logger),
+		listener, "tunnel", logger)
+
+	// cloudflared stops on the same signal, with its own grace period, so
+	// requests already in the tunnel are answered while the listener drains.
 	g.Go(func() error {
-		if err := tun.Run(ctx); err != nil {
-			return fmt.Errorf("tunnel run: %w", err)
-		}
-		if ctx.Err() == nil {
-			return fmt.Errorf("tunnel run: cloudflared exited")
+		if err := tun.Supervise(ctx); err != nil {
+			return fmt.Errorf("tunnel: %w", err)
 		}
 		return nil
 	})
+	logger.Info("MCP server available", "url", "https://"+cli.Cloudflare.Hostname+"/mcp")
 	return nil
+}
+
+// tailnetMux builds the routes for the tailnet listener. --insecure never
+// reaches this function: the gate is always the WhoIs allowlist.
+func tailnetMux(handler http.Handler, gate func(http.Handler) http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthHandler)
+	mux.Handle("/mcp", gate(handler))
+	mux.Handle("/mcp/sse", gate(handler))
+	return mux
 }
 
 // serveTailnet joins the tailnet as an embedded node and serves the same
@@ -240,20 +375,13 @@ func serveTailnet(ctx context.Context, g *errgroup.Group, cli config.CLI, handle
 		return fmt.Errorf("tailscale listen: %w", err)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
 	gate := ts.Middleware(cli.Tailscale.AllowedLogins, cli.Tailscale.AllowedTags)
-	mux.Handle("/mcp", gate(handler))
-	mux.Handle("/mcp/sse", gate(handler))
-
-	serveHTTP(ctx, g, &http.Server{
-		Handler:           middleware.Logging(logger)(mux),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}, ln, "tailnet")
-	g.Go(func() error {
-		<-ctx.Done()
-		return ts.Close()
+	// The node is closed only after the listener has drained: closing it
+	// first would cut the WireGuard path under requests still being answered.
+	serveHTTP(ctx, g, newServer(tailnetMux(handler, gate), "tailnet", logger), ln, "tailnet", logger, func() {
+		if err := ts.Close(); err != nil {
+			logger.Warn("tsnet close", "error", err)
+		}
 	})
 
 	logger.Info("MCP server available on tailnet", "url", "https://"+ts.FQDN+"/mcp",

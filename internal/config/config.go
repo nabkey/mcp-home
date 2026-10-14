@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/alecthomas/kong"
 )
@@ -58,12 +59,44 @@ type TailscaleConfig struct {
 // Enabled reports whether the tsnet listener should run.
 func (t TailscaleConfig) Enabled() bool { return t.AuthKey != "" }
 
-// Validate is called by Kong.
+// Validate is called by Kong. Entries are judged after trimming whitespace,
+// the same way the tailnet middleware matches them, so "," or " " does not
+// count as an allowlist, and a tag that cannot match any node (missing the
+// "tag:" prefix, or put in the login list) is reported instead of silently
+// refusing the device it was meant for.
 func (t TailscaleConfig) Validate() error {
-	if t.Enabled() && len(t.AllowedLogins) == 0 && len(t.AllowedTags) == 0 {
-		return fmt.Errorf("TS_ALLOWED_LOGINS or TS_ALLOWED_TAGS must be set when TS_AUTHKEY is set")
+	if !t.Enabled() {
+		return nil
+	}
+	logins, tags := trimList(t.AllowedLogins), trimList(t.AllowedTags)
+	if len(logins) == 0 && len(tags) == 0 {
+		return fmt.Errorf("TS_ALLOWED_LOGINS or TS_ALLOWED_TAGS must list at least one login or tag when TS_AUTHKEY is set")
+	}
+	for _, tag := range tags {
+		if !strings.HasPrefix(tag, "tag:") || len(tag) == len("tag:") || strings.ContainsAny(tag, " \t") {
+			return fmt.Errorf("TS_ALLOWED_TAGS entry %q is not a Tailscale tag (expected the form tag:name)", tag)
+		}
+	}
+	for _, login := range logins {
+		if strings.HasPrefix(login, "tag:") {
+			return fmt.Errorf("TS_ALLOWED_LOGINS entry %q is a tag; move it to TS_ALLOWED_TAGS", login)
+		}
+		if strings.ContainsAny(login, " \t") {
+			return fmt.Errorf("TS_ALLOWED_LOGINS entry %q contains whitespace", login)
+		}
 	}
 	return nil
+}
+
+// trimList trims each entry and drops empty ones.
+func trimList(list []string) []string {
+	var out []string
+	for _, v := range list {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // CloudflareConfig holds the optional Cloudflare Tunnel + Access front door.
@@ -83,13 +116,25 @@ func (c CloudflareConfig) Enabled() bool {
 }
 
 // Validate returns an error if the Cloudflare group is partially configured.
+// The hostname must be a bare DNS name: it is matched against the Access
+// application's domain and written into the tunnel ingress and the DNS
+// record, and a scheme, path, port or stray whitespace makes the first fail
+// with "no Access application found" and the others route nowhere.
 func (c CloudflareConfig) Validate() error {
-	return validateAllOrNothing("Cloudflare", map[string]string{
+	if err := validateAllOrNothing("Cloudflare", map[string]string{
 		"CF_API_TOKEN":  c.APIToken,
 		"CF_ACCOUNT_ID": c.AccountID,
 		"CF_ZONE_ID":    c.ZoneID,
 		"CF_HOSTNAME":   c.Hostname,
-	})
+	}); err != nil {
+		return err
+	}
+	if c.Hostname != "" {
+		if strings.ContainsAny(c.Hostname, ":/ \t") || !strings.Contains(c.Hostname, ".") || strings.HasSuffix(c.Hostname, ".") {
+			return fmt.Errorf("CF_HOSTNAME %q must be a bare hostname such as mcp.example.com (no scheme, path, port or trailing dot)", c.Hostname)
+		}
+	}
+	return nil
 }
 
 // HassConfig holds optional Home Assistant settings.

@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nabkey/mcp-home/internal/config"
@@ -11,6 +12,7 @@ import (
 	"github.com/nabkey/mcp-home/internal/frigate"
 	"github.com/nabkey/mcp-home/internal/hass"
 	"github.com/nabkey/mcp-home/internal/lists"
+	"github.com/nabkey/mcp-home/internal/mcputil"
 	"github.com/nabkey/mcp-home/internal/media"
 )
 
@@ -28,12 +30,31 @@ func newServer(version string, logger *slog.Logger) *mcp.Server {
 	})
 }
 
+// confirmSecret joins the configured secrets, or returns "" if there are none.
+func confirmSecret(cfg config.CLI) string {
+	parts := []string{cfg.Hass.Token, cfg.Cloudflare.APIToken, cfg.Tailscale.AuthKey,
+		cfg.Sonarr.APIKey, cfg.Radarr.APIKey, cfg.ESPHome.Password}
+	if strings.Join(parts, "") == "" {
+		return ""
+	}
+	return strings.Join(parts, "\x00")
+}
+
 // New creates a configured MCP server with tools registered based on cfg.
 // version is the build version injected into the binary (e.g. "1.4.0" or "dev").
 // ctx bounds the startup queries that generated tools make against Home
 // Assistant to decide what to register.
 func New(ctx context.Context, cfg config.CLI, version string, logger *slog.Logger) *mcp.Server {
 	server := newServer(version, logger)
+
+	// Bind confirmation answers to a key derived from secrets that survive a
+	// redeploy, so a prompt answered while the container is being replaced
+	// still counts. Anyone who knows these already controls the home.
+	// With none set (a test or an insecure dev run) the random per-process
+	// key stays: a key derived from nothing would be public.
+	if secret := confirmSecret(cfg); secret != "" {
+		mcputil.SetConfirmSecret([]byte(secret))
+	}
 
 	// Audit every tool call with the authenticated user.
 	server.AddReceivingMiddleware(auditMiddleware(logger))
