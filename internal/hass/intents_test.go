@@ -133,11 +133,28 @@ func TestIntentInputSchemaTargeting(t *testing.T) {
 		}
 	}
 
-	// At least one of name/area/floor/domain must be supplied, so an
-	// under-specified call cannot act on every entity in scope.
+	// HassTurnOn has no required domain, so an area only narrows: one of
+	// name/domain/device_class must be supplied, or "close the garage"
+	// would also switch off everything else in the garage.
 	anyOf, _ := got["anyOf"].([]any)
-	if len(anyOf) != 4 {
-		t.Fatalf("anyOf = %v, want 4 alternatives", got["anyOf"])
+	if len(anyOf) != 3 {
+		t.Fatalf("anyOf = %v, want name/domain/device_class", got["anyOf"])
+	}
+	for _, alt := range anyOf {
+		req := alt.(map[string]any)["required"].([]any)
+		if req[0] == "area" || req[0] == "floor" {
+			t.Errorf("%v is a sufficient target; it should only narrow", req[0])
+		}
+	}
+
+	// A single-domain intent keeps area/floor as targets in their own right.
+	for _, d := range IntentCatalog {
+		if d.ToolName == "home_light_set" {
+			light := schemaJSON(t, d.InputSchema())
+			if alts, _ := light["anyOf"].([]any); len(alts) != 4 {
+				t.Errorf("home_light_set anyOf = %v, want name/area/floor/domain", light["anyOf"])
+			}
+		}
 	}
 
 	// preferred_area_id/preferred_floor_id are voice-satellite context we
@@ -270,6 +287,15 @@ func TestHandleIntentNoTargetsIsNotAnError(t *testing.T) {
 // silently fails to cover it.
 func TestIntentCatalogDeclaresDispatchableServices(t *testing.T) {
 	for _, d := range IntentCatalog {
+		if d.OnOff != "" {
+			// Per-domain services come from onOffServices.
+			for _, dom := range onOffDomains(d.OnOff) {
+				if len(onOffServices(d.OnOff, dom)) == 0 {
+					t.Errorf("%s: no services for domain %s, which it claims to act on", d.ToolName, dom)
+				}
+			}
+			continue
+		}
 		if len(d.Services) == 0 {
 			t.Errorf("%s declares no services; HASS_DENY_SERVICES cannot cover it", d.ToolName)
 		}

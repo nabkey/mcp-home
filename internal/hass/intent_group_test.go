@@ -99,7 +99,8 @@ func TestMediaGroupRejectsBadCalls(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"missing per-action slot", map[string]any{"action": "set_volume", "name": "kitchen"}, `requires "volume_level"`},
+		// The schema's if/then catches this before the handler does.
+		{"missing per-action slot", map[string]any{"action": "set_volume", "name": "kitchen"}, `volume_level`},
 		{"unknown action", map[string]any{"action": "explode", "name": "kitchen"}, "invalid arguments"},
 		{"no target", map[string]any{"action": "pause"}, "invalid arguments"},
 	}
