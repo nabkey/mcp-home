@@ -23,9 +23,9 @@ const (
 	maxDownloadSize = 100 * 1024 * 1024
 )
 
-// ensureCloudflared returns the path to the cloudflared binary.
+// EnsureCloudflared returns the path to the cloudflared binary.
 // It first checks PATH, then falls back to a cached download in ~/.cache/mcp-server/.
-func ensureCloudflared(ctx context.Context, logger *slog.Logger) (string, error) {
+func EnsureCloudflared(ctx context.Context, logger *slog.Logger) (string, error) {
 	// Check PATH first.
 	if path, err := exec.LookPath("cloudflared"); err == nil {
 		return path, nil

@@ -13,11 +13,19 @@ import (
 // and Frigate camera names and event IDs.
 var safeIdentifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
+// maxIdentifierLen bounds an identifier. Home Assistant entity ids and the
+// like are far shorter; the bound stops an unbounded string being spliced
+// into an upstream URL.
+const maxIdentifierLen = 255
+
 // Identifier validates that s is a safe identifier for use in URL paths.
 // Returns an error if s is empty or contains characters that could enable path traversal.
 func Identifier(name, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s is required", name)
+	}
+	if len(value) > maxIdentifierLen {
+		return fmt.Errorf("%s is longer than %d characters", name, maxIdentifierLen)
 	}
 	if !safeIdentifier.MatchString(value) {
 		return fmt.Errorf("%s contains invalid characters: %q", name, value)
