@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/nabkey/mcp-home/compare/v2.0.0...v2.0.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **deps:** update Go to 1.27.2 and x/net to v0.60.0 to clear vulncheck ([#60](https://github.com/nabkey/mcp-home/issues/60)) ([71582cc](https://github.com/nabkey/mcp-home/commit/71582cc50d6506f412613a0e4b521e6d3e321005))
+
 ## [2.0.0](https://github.com/nabkey/mcp-home/compare/v1.13.0...v2.0.0) (2026-10-14)
 
 
