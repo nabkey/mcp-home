@@ -1,0 +1,46 @@
+{
+  "Dune": [
+    {"title":"Dune","year":2021,"tmdbId":438631,"imdbId":"tt1160419","overview":"Paul Atreides, a brilliant and gifted young man born into a great destiny beyond his understanding, must travel to the most dangerous planet in the universe to ensure the future of his family and his people.","status":"released","studio":"Legendary Pictures","runtime":155,"isAvailable":true,"hasFile":false,"originalLanguage":{"id":1,"name":"English"}},
+    {"title":"Dune: Part Two","year":2024,"tmdbId":693134,"imdbId":"tt15239678","overview":"Follow the mythic journey of Paul Atreides as he unites with Chani and the Fremen.","status":"released","studio":"Legendary Pictures","runtime":167,"isAvailable":true,"hasFile":false},
+    {"title":"Dune","year":1984,"tmdbId":841,"imdbId":"tt0087182","overview":"In the year 10,191, the most precious substance in the universe is the spice Melange.","status":"released","studio":"The De Laurentiis Company","runtime":136,"isAvailable":true,"hasFile":false},
+    {"title":"Dune: Part Three","year":2026,"tmdbId":1170608,"imdbId":"tt31378509","overview":"Nearly two decades after he seized control of the Imperium, Paul Atreides is now a ruthless Emperor.","status":"announced","studio":"Legendary Pictures","runtime":140,"isAvailable":true,"hasFile":false,"inCinemas":"2026-12-18T00:00:00Z","digitalRelease":"2027-02-02T00:00:00Z"},
+    {"title":"Dune","year":2020,"tmdbId":697620,"imdbId":"tt12451788","overview":"Sounds as witnesses. They blurr into memories, half-dreams.","status":"announced","studio":"Kecskemétfilm","runtime":4,"isAvailable":true,"hasFile":false},
+    {"title":"The Dune","year":2014,"tmdbId":271683,"imdbId":"tt2251648","overview":"Through the course of several accidents and chance encounters, Hanoch and Ruben will meet.","status":"released","studio":"Les Films du Poisson","runtime":86,"isAvailable":true,"hasFile":false}
+  ],
+  "The Lion King": [
+    {"title":"The Lion King","year":1994,"tmdbId":8587,"imdbId":"tt0110357","overview":"Young lion prince Simba, eager to one day become king of the Pride Lands, grows up under the watchful eye of his father Mufasa.","status":"released","studio":"Walt Disney Pictures","runtime":89,"isAvailable":true,"hasFile":false},
+    {"title":"The Lion King","year":2019,"tmdbId":420818,"imdbId":"tt6105098","overview":"Simba idolizes his father, King Mufasa, and takes to heart his own royal destiny.","status":"released","studio":"Walt Disney Pictures","runtime":118,"isAvailable":true,"hasFile":false},
+    {"title":"Mufasa: The Lion King","year":2024,"tmdbId":762509,"imdbId":"tt13186482","overview":"Mufasa, a cub lost and alone, meets a sympathetic lion named Taka.","status":"released","studio":"Walt Disney Pictures","runtime":118,"isAvailable":true,"hasFile":false},
+    {"title":"The Making of the Lion King","year":1994,"tmdbId":845969,"imdbId":"tt0366742","overview":"A behind-the-scenes look at the making of The Lion King.","status":"released","studio":"The Wrightwood Group","runtime":26,"isAvailable":true,"hasFile":false}
+  ],
+  "Little Women": [
+    {"title":"Little Women","year":2019,"tmdbId":331482,"imdbId":"tt3281548","overview":"Four sisters come of age in America in the aftermath of the Civil War.","status":"released","studio":"Columbia Pictures","runtime":135,"isAvailable":true,"hasFile":false},
+    {"title":"Little Women","year":1994,"tmdbId":9587,"imdbId":"tt0110367","overview":"Four sisters come of age in America in the aftermath of the Civil War.","status":"released","studio":"Di Novi Pictures","runtime":115,"isAvailable":true,"hasFile":false},
+    {"title":"Little Women","year":1949,"tmdbId":43436,"imdbId":"tt0041594","overview":"Four sisters come of age in America in the aftermath of the Civil War.","status":"released","studio":"Metro-Goldwyn-Mayer","runtime":121,"isAvailable":true,"hasFile":false},
+    {"title":"Little Women","year":1933,"tmdbId":39938,"imdbId":"tt0024264","overview":"Four sisters come of age in America in the aftermath of the Civil War.","status":"released","studio":"RKO Radio Pictures","runtime":115,"isAvailable":true,"hasFile":false},
+    {"title":"Little Women","year":2018,"tmdbId":483347,"imdbId":"tt6495094","overview":"A modern retelling of Louisa May Alcott's classic novel.","status":"released","studio":"Main Dog Productions","runtime":112,"isAvailable":true,"hasFile":false}
+  ],
+  "Halloween": [
+    {"title":"Halloween","year":1978,"tmdbId":948,"imdbId":"tt0077651","overview":"Fifteen years after murdering his sister on Halloween Night 1963, Michael Myers escapes from a mental hospital.","status":"released","studio":"Compass International Pictures","runtime":91,"isAvailable":true,"hasFile":false},
+    {"title":"Halloween","year":2018,"tmdbId":424139,"imdbId":"tt1502407","overview":"Laurie Strode comes to her final confrontation with Michael Myers.","status":"released","studio":"Universal Pictures","runtime":106,"isAvailable":true,"hasFile":false},
+    {"title":"Halloween","year":2007,"tmdbId":2082,"imdbId":"tt0373883","overview":"The early years of young Michael Myers.","status":"released","studio":"Dimension Films","runtime":110,"isAvailable":true,"hasFile":false},
+    {"title":"Halloween","year":2019,"tmdbId":1409942,"overview":"A Halloween fan film.","status":"announced","studio":"Flickerbox Films","runtime":24,"isAvailable":true,"hasFile":false}
+  ],
+  "Nosferatu": [
+    {"title":"Nosferatu","year":2024,"tmdbId":426063,"imdbId":"tt5040012","overview":"A gothic tale of obsession between a haunted young woman and the terrifying vampire infatuated with her.","status":"released","studio":"Focus Features","runtime":133,"isAvailable":true,"hasFile":false},
+    {"title":"Nosferatu","year":1922,"tmdbId":653,"imdbId":"tt0013442","overview":"The mysterious Count Orlok summons a happily married real estate agent to his castle.","status":"released","studio":"Prana-Film","runtime":94,"isAvailable":true,"hasFile":false,"originalLanguage":{"id":4,"name":"German"}},
+    {"title":"Nosferatu the Vampyre","year":1979,"tmdbId":6404,"imdbId":"tt0079641","overview":"A real estate agent leaves behind his beautiful wife to go to Transylvania.","status":"released","studio":"Werner Herzog Filmproduktion","runtime":107,"isAvailable":true,"hasFile":false},
+    {"title":"Nosferatu","year":2025,"tmdbId":1528448,"imdbId":"tt38515175","overview":"Nosferatu arrives in a town escaping from Van Helsing.","status":"announced","studio":"Bela Filmes","runtime":88,"isAvailable":true,"hasFile":false}
+  ],
+  "Godzilla": [
+    {"title":"Godzilla","year":2014,"tmdbId":124905,"imdbId":"tt0831387","overview":"Ford Brody, a Navy bomb expert, has just reunited with his family in San Francisco.","status":"released","studio":"Legendary Pictures","runtime":123,"isAvailable":true,"hasFile":false},
+    {"title":"Godzilla","year":1998,"tmdbId":929,"imdbId":"tt0120685","overview":"French nuclear tests irradiate an iguana into a giant monster.","status":"released","studio":"TriStar Pictures","runtime":138,"isAvailable":true,"hasFile":false},
+    {"title":"Godzilla","year":1954,"tmdbId":1678,"imdbId":"tt0047034","overview":"Japan is thrown into a panic after several ships are sunk near Odo Island.","status":"released","studio":"TOHO","runtime":96,"isAvailable":true,"hasFile":false,"originalLanguage":{"id":8,"name":"Japanese"}},
+    {"title":"Godzilla","year":1977,"tmdbId":340315,"imdbId":"tt1543211","overview":"A re-edited Italian-language dubbed version of the original Godzilla.","status":"released","studio":"Paramount Pictures International","runtime":96,"isAvailable":true,"hasFile":false}
+  ],
+  "Total Recall": [
+    {"title":"Total Recall","year":1990,"tmdbId":861,"imdbId":"tt0100802","overview":"Construction worker Douglas Quaid's obsession with the planet Mars leads him to visit Rekall.","status":"released","studio":"Carolco Pictures","runtime":113,"isAvailable":true,"hasFile":false},
+    {"title":"Total Recall","year":2012,"tmdbId":64635,"imdbId":"tt1386703","overview":"Factory worker Doug Quaid takes a virtual mind-trip vacation with the Rekall company.","status":"released","studio":"Total Recall","runtime":118,"isAvailable":true,"hasFile":false},
+    {"title":"Total Recall","year":2004,"tmdbId":1385352,"overview":"Television spare parts follow each other and grow in number on an electronic soundtrack.","status":"released","runtime":5,"isAvailable":true,"hasFile":false}
+  ]
+}

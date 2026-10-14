@@ -174,7 +174,8 @@ Each integration has its own client that handles HTTP/WebSocket communication:
 - **Home Assistant** (`HASS_URL`, `HASS_TOKEN`) — REST API with Bearer token auth + WebSocket for automation/script/scene config, traces, registries (areas/devices/entities/labels/floors), and long-term statistics. Two-step WS auth handshake (`auth_required` → `auth` → `auth_ok`).
 - **Sonarr** (`SONARR_URL`, `SONARR_API_KEY`) — `/api/v3/` endpoints, `X-Api-Key` header auth.
 - **Radarr** (`RADARR_URL`, `RADARR_API_KEY`) — Same *arr API pattern as Sonarr.
-- **Frigate** (`FRIGATE_URL`) — No auth, REST API for config, events, and JPEG snapshots.
+- **Frigate** (`FRIGATE_URL`) — No auth (point it at the API port 5000, not the authenticated 8971), REST API for config, events, thumbnails and JPEG snapshots. Since 0.14 list filters are single comma-joined params and the score lives in `data.top_score` (top-level `top_score` is 0). Frigate's clock, and the timestamp burned into its images, is typically UTC; event times are reported in the house zone, taken from the tool's `timezone` argument, then Frigate's `ui.timezone`, then `TZ`, then the server zone (a UTC fallback is flagged in the result).
+- **Sonarr/Radarr** lookups mark library items with a non-zero `id`; adds post the lookup record with the chosen profile/folder laid over it (as the *arr UIs do), minus that `id`.
 - **ESPHome** (`ESPHOME_URL`, optional `ESPHOME_PASSWORD`) — ESPHome Device Builder dashboard. All operations go over the single multiplexed `/ws` command socket (`{command, message_id, args}` → `ResultMessage` / streaming `EventMessage{event:"output"|"result"}` / `ErrorMessage`): `devices/list`, `config/get_secrets`, `devices/get_config`, `devices/update_config` (falls back to `devices/create` on `not_found`), `devices/validate` and `devices/logs` (streaming), `firmware/get_binaries` + `firmware/download_token` (binary then fetched over HTTP `/api/firmware/download?token=`). Compile and upload can run for minutes — longer than an MCP request stays open — so they use the dashboard's **async job queue**: `firmware/compile` / `firmware/upload` return a `FirmwareJob` immediately, and the caller polls `firmware/get_job` until the job is terminal (`completed`/`failed`/`cancelled`). `get_job` deliberately returns terminal jobs with an empty `output` (the log is flushed to a per-job sidecar), so `get_esphome_job` fetches the build/flash log separately via `firmware/follow_job` once the job is done — that command replays the sidecar as `output` events then a terminal `result`, reusing the same streaming reader as validate/logs. This is the same poll pattern the MCP Tasks extension would model at the protocol layer, done at the application layer because the go-sdk in use doesn't implement Tasks yet. Auth: a dashboard reporting `requires_auth` gets an `auth/login` handshake on `/ws`; an add-on on its exposed port reports `requires_auth: false`.
 
 All tool sets are optional — the server registers only what's configured and starts even with zero tools.
@@ -248,20 +249,20 @@ These are not hand-written. At startup the server queries the instance and gener
 
 | Tool | Description |
 |------|-------------|
-| `search_movies` | Search movies by name via Radarr |
-| `add_movie` | Add a movie to Radarr for downloading |
-| `search_series` | Search TV series by name via Sonarr |
-| `add_series` | Add a TV series to Sonarr for downloading |
-| `get_download_queue` | Check download progress for Sonarr/Radarr |
+| `search_movies` | Search Radarr; compact results (year, tmdb_id, studio, in_library/downloaded, `kind: short` for extras), optional `year` filter, and an `ambiguous` group when results share a title |
+| `add_movie` | Add a movie; requires `tmdb_id`+`title`+`year`, re-checked against TMDB (a mismatch is refused, which catches remakes). Already in the library returns its state instead of adding. Quality profile/root folder default to what the library uses (never the stock `Any`); searches by default; says when an unreleased film can be grabbed |
+| `search_series` | Search Sonarr; compact results with year, network, `type` (anime/standard/daily), season count, library state, and `ambiguous` groups (UK/US versions, reboots, anime vs live action) |
+| `add_series` | Add a series with the same `tvdb_id`+`title`+`year` check; sets `seriesType` anime from the lookup and prefers an anime root folder. Already in the library returns per-season monitored/downloaded state (answers "get me the new season") |
+| `get_download_queue` | Queue named by title/episode, season packs collapsed, one `state` per item (downloading, stalled, import_blocked, failed, delayed...), an ETA only when credible (moving and under 3 days), and per-service `errors` so a failed service never reads as an empty queue |
 
 **Frigate NVR** (requires `FRIGATE_URL`):
 
 | Tool | Description |
 |------|-------------|
-| `list_frigate_cameras` | List all enabled cameras |
-| `get_camera_snapshot` | Get current camera frame as JPEG |
-| `get_frigate_events` | Recent detection events (person, car, etc.) |
-| `get_event_snapshot` | Get snapshot for a specific detection event |
+| `list_frigate_cameras` | Enabled cameras with their zones and tracked labels, plus the house time zone and current local time |
+| `get_camera_snapshot` | Live frame as JPEG, 360px/q70 by default (~25-35 KB vs ~120-135 KB full size), with capture time and an offline flag |
+| `get_frigate_events` | Events by camera/zone/label/sub_label/min_score and `after`/`before` in house-local time (bare `HH:MM` resolves against now); times returned with their offset; `thumbnails=true` attaches up to 6 small thumbnails (64 KB cap) so a door/driveway question takes 2 calls |
+| `get_event_snapshot` | One event's snapshot, 360px/q70 by default, `crop=true` zooms to the object; returned with camera, label, score and local time |
 
 **ESPHome** (requires `ESPHOME_URL`):
 

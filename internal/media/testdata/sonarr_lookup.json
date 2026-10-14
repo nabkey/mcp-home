@@ -1,0 +1,40 @@
+{
+  "The Office": [
+    {"title":"The Office","year":2001,"tvdbId":78107,"imdbId":"tt0290978","overview":"A mockumentary about life in a mid-sized suboffice paper merchants in a bleak British industrial town.","status":"ended","network":"BBC Two","seriesType":"standard","genres":["Comedy"],"seasons":[{"seasonNumber":0,"monitored":false},{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true}]},
+    {"title":"The Office (AU)","year":2024,"tvdbId":453455,"imdbId":"tt10193026","overview":"When Hannah Howard, managing director of Flinley Craddick packaging company, gets news from Head Office.","status":"ended","network":"Prime Video","seriesType":"standard","seasons":[{"seasonNumber":1,"monitored":true}]},
+    {"title":"The Office (US)","year":2005,"tvdbId":73244,"imdbId":"tt0386676","overview":"A mockumentary on a group of typical office workers.","status":"ended","network":"NBC","seriesType":"standard","genres":["Comedy"],"seasons":[{"seasonNumber":0,"monitored":false},{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true},{"seasonNumber":3,"monitored":true},{"seasonNumber":4,"monitored":true},{"seasonNumber":5,"monitored":true},{"seasonNumber":6,"monitored":true},{"seasonNumber":7,"monitored":true},{"seasonNumber":8,"monitored":true},{"seasonNumber":9,"monitored":true}]},
+    {"title":"The Office Games","year":2023,"tvdbId":440886,"imdbId":"tt2115961","overview":"Alice and Mest, driven by ideals of a stable career path, face life challenges.","status":"ended","network":"Prime Video","seriesType":"standard"}
+  ],
+  "Shogun": [
+    {"title":"Shogun","year":1980,"tvdbId":80284,"imdbId":"tt0080274","overview":"Shipwrecked off the coast of Japan, British sea pilot John Blackthorne is in danger of being executed.","status":"ended","network":"NBC","seriesType":"standard","seasons":[{"seasonNumber":1,"monitored":true}]},
+    {"title":"Shōgun","year":2024,"tvdbId":392573,"imdbId":"tt2788316","overview":"Set in Japan in the year 1600, at the dawn of a century-defining civil war.","status":"continuing","network":"FX","seriesType":"standard","nextAiring":"2026-11-05T02:00:00Z","seasons":[{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true}]},
+    {"title":"The Unfettered Shogun","year":1978,"tvdbId":266493,"imdbId":"tt0220189","overview":"Tokugawa Yoshimune goes out disguised to personally take care of evildoers.","status":"ended","network":"TV Asahi","seriesType":"standard"}
+  ],
+  "One Piece": [
+    {"title":"One Piece","year":1999,"tvdbId":81797,"imdbId":"tt0388629","overview":"The adventures of Monkey D. Luffy and his pirate crew.","status":"continuing","network":"Fuji TV","seriesType":"standard","genres":["Action","Animation","Anime","Comedy"],"originalLanguage":{"id":8,"name":"Japanese"},"seasons":[{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true},{"seasonNumber":3,"monitored":true}]},
+    {"title":"THE ONE PIECE","year":0,"tvdbId":464521,"imdbId":"tt30476502","overview":"THE ONE PIECE follows Monkey D. Luffy, an aspiring pirate.","status":"upcoming","network":"Netflix","seriesType":"standard","genres":["Animation","Anime"]},
+    {"title":"ONE PIECE (2023)","year":2023,"tvdbId":392276,"imdbId":"tt11737520","overview":"With his straw hat and ragtag crew, young pirate Monkey D. Luffy goes on an epic voyage for treasure in this live-action adaptation of the popular manga.","status":"continuing","network":"Netflix","seriesType":"standard","genres":["Action","Adventure"],"seasons":[{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true}]}
+  ],
+  "Doctor Who": [
+    {"title":"Doctor Who","year":1963,"tvdbId":76107,"imdbId":"tt0056751","overview":"The Doctor, a mysterious traveller in space and time, travels in his ship, the TARDIS.","status":"ended","network":"BBC One","seriesType":"standard"},
+    {"title":"Doctor Who (2023)","year":2024,"tvdbId":449991,"imdbId":"tt31433814","overview":"The Doctor and friends travel from the dawn of human history to distant alien worlds.","status":"continuing","network":"BBC One","seriesType":"standard","seasons":[{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true}]},
+    {"title":"Doctor Who (2005)","year":2005,"tvdbId":78804,"imdbId":"tt0436992","overview":"The Doctor is an alien Time Lord from the planet Gallifrey.","status":"ended","network":"BBC One","seriesType":"standard"}
+  ],
+  "Death Note": [
+    {"title":"Death Note","year":2006,"tvdbId":79481,"imdbId":"tt0877057","overview":"When a Japanese high schooler comes into possession of a mystical notebook, he finds he has the power to kill anybody whose name he enters in it.","status":"ended","network":"Nippon TV","seriesType":"standard","genres":["Animation","Anime","Thriller"],"originalLanguage":{"id":8,"name":"Japanese"},"seasons":[{"seasonNumber":0,"monitored":false},{"seasonNumber":1,"monitored":true}]},
+    {"title":"Death Note (2015)","year":2015,"tvdbId":296956,"imdbId":"tt4623604","overview":"Light Yagami, an ordinary university student, receives a death note which changes his life.","status":"ended","network":"Nippon TV","seriesType":"standard","genres":["Drama","Thriller"],"originalLanguage":{"id":8,"name":"Japanese"},"seasons":[{"seasonNumber":1,"monitored":true}]}
+  ],
+  "Battlestar Galactica": [
+    {"title":"Battlestar Galactica","year":1978,"tvdbId":71173,"imdbId":"tt0076984","overview":"When the 12 Colonies of Man are wiped out by a cybernetic race called the Cylons.","status":"ended","network":"ABC (US)","seriesType":"standard","seasons":[{"seasonNumber":1,"monitored":true}]},
+    {"title":"Battlestar Galactica (2003)","year":2005,"tvdbId":73545,"imdbId":"tt0407362","overview":"In a distant part of the universe, a civilization of humans live on planets known as the Twelve Colonies.","status":"ended","network":"SYFY","seriesType":"standard","seasons":[{"seasonNumber":0,"monitored":false},{"seasonNumber":1,"monitored":true},{"seasonNumber":2,"monitored":true},{"seasonNumber":3,"monitored":true},{"seasonNumber":4,"monitored":true}]},
+    {"title":"Battlestar Galactica: Blood & Chrome","year":2012,"tvdbId":204781,"imdbId":"tt1704292","overview":"Battlestar: Blood & Chrome takes place in the 10th year of the first Cylon war.","status":"ended","network":"SYFY","seriesType":"standard"}
+  ],
+  "House of Cards": [
+    {"title":"House of Cards","year":1990,"tvdbId":79861,"imdbId":"tt0098825","overview":"The schemes of a ruthlessly ambitious British politician.","status":"ended","network":"BBC One","seriesType":"standard"},
+    {"title":"House of Cards (US)","year":2013,"tvdbId":262980,"imdbId":"tt1856010","overview":"Ruthless and cunning, Congressman Francis Underwood and his wife Claire stop at nothing to conquer everything.","status":"ended","network":"Netflix","seriesType":"standard"}
+  ],
+  "Fullmetal Alchemist": [
+    {"title":"Fullmetal Alchemist","year":2003,"tvdbId":75579,"imdbId":"tt0421357","overview":"Two young brothers are raised as alchemists.","status":"ended","network":"Animax","seriesType":"standard","genres":["Animation","Anime"]},
+    {"title":"Fullmetal Alchemist: Brotherhood","year":2009,"tvdbId":85249,"imdbId":"tt1355642","overview":"Edward and Alphonse Elric's reckless disregard for alchemy's fundamental laws.","status":"ended","network":"TBS (JP)","seriesType":"standard","genres":["Animation","Anime"]}
+  ]
+}
