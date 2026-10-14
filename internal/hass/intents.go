@@ -3,6 +3,7 @@ package hass
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -58,9 +59,23 @@ type IntentDef struct {
 	// only registered when the instance has at least one entity in one of
 	// them. An empty list means always register.
 	Domains []string
-	// Targeted adds the standard name/area/floor targeting slots, one of
-	// which must be supplied.
+	// Targeted adds the standard name/area/floor/domain targeting slots, one
+	// of which must be supplied.
 	Targeted bool
+	// OnOff marks HassTurnOn/HassTurnOff ("on"/"off"). These have no
+	// required domain upstream, so an area alone matches every exposed
+	// entity in it across domains, and they dispatch a different service per
+	// entity domain. Both facts change how they are targeted and gated: see
+	// targetSchema and onOffServices.
+	OnOff string
+	// ActsOn lists the domains the intent can act on, which selects the
+	// names its description lists. Empty means Domains.
+	ActsOn []string
+	// DefaultDomains is sent as the domain slot when the caller gives none.
+	// HassSetPosition has no required domain upstream and aborts the whole
+	// call on the first matched entity that is not a cover or valve, so an
+	// area-targeted "open the garage door halfway" fails without it.
+	DefaultDomains []string
 	// Slots are intent-specific arguments beyond the targeting ones.
 	Slots []IntentSlot
 	// Services lists every domain.service this intent can dispatch inside
@@ -89,7 +104,7 @@ type IntentGroup struct {
 // IntentGroups is keyed by the grouped tool name.
 var IntentGroups = map[string]IntentGroup{
 	"home_media": {
-		Description: "Controls a media player: transport, volume, mute, or search-and-play. Pick an action and target the player by name, area or floor.",
+		Description: "Controls a media player: transport, volume, mute, or search-and-play. Pick an action and target the player by name, area or floor. When the user names no player (\"pause the music\", \"turn it up\"), pass domain [\"media_player\"]: every action except search_and_play then acts only on players that are playing (unpause: that are paused). search_and_play needs exactly one player.",
 	},
 }
 
@@ -103,6 +118,79 @@ func groupMembers(group string) []IntentDef {
 		}
 	}
 	return out
+}
+
+// actsOn returns the domains whose entities this intent can act on.
+func (d IntentDef) actsOn() []string {
+	if d.OnOff != "" {
+		return onOffDomains(d.OnOff)
+	}
+	if len(d.ActsOn) > 0 {
+		return d.ActsOn
+	}
+	return d.Domains
+}
+
+// onOffDomainList is every domain HassTurnOn/HassTurnOff can act on:
+// OnOffIntentHandler special-cases button, input_button, cover, lock and
+// valve, and falls back to homeassistant.turn_on/off for any domain that
+// has the service.
+var onOffDomainList = []string{
+	"automation", "button", "climate", "cover", "fan", "humidifier",
+	"input_boolean", "input_button", "light", "lock", "media_player",
+	"remote", "scene", "script", "siren", "switch", "vacuum", "valve",
+	"water_heater",
+}
+
+// onOffDomains is onOffDomainList for one direction: buttons and scenes
+// cannot be turned off.
+func onOffDomains(dir string) []string {
+	out := make([]string, 0, len(onOffDomainList))
+	for _, d := range onOffDomainList {
+		if dir == "off" && (d == "button" || d == "input_button" || d == "scene") {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// onOffServices is what HassTurnOn (dir "on") or HassTurnOff ("off") calls
+// for an entity in domain, per OnOffIntentHandler.async_call_service. The
+// generic fallback goes through homeassistant.turn_on/off, which in turn
+// calls <domain>.turn_on/off, so a deny on either must count.
+func onOffServices(dir, domain string) []string {
+	switch domain {
+	case "button", "input_button":
+		if dir == "on" {
+			return []string{domain + ".press"}
+		}
+		return nil
+	case "cover":
+		if dir == "on" {
+			return []string{"cover.open_cover"}
+		}
+		return []string{"cover.close_cover"}
+	case "lock":
+		if dir == "on" {
+			return []string{"lock.lock"}
+		}
+		return []string{"lock.unlock"}
+	case "valve":
+		if dir == "on" {
+			return []string{"valve.open_valve"}
+		}
+		return []string{"valve.close_valve"}
+	}
+	svc := "turn_" + dir
+	return []string{"homeassistant." + svc, domain + "." + svc}
+}
+
+// mediaClasses is upstream's MediaClass enum.
+var mediaClasses = []string{
+	"album", "app", "artist", "channel", "composer", "contributing_artist",
+	"directory", "episode", "game", "genre", "image", "movie", "music",
+	"playlist", "podcast", "season", "track", "tv_show", "url", "video",
 }
 
 func strSchema(desc string) *jsonschema.Schema {
@@ -137,16 +225,16 @@ var IntentCatalog = []IntentDef{
 	{
 		ToolName:    "home_turn_on",
 		Intent:      "HassTurnOn",
-		Services:    []string{"homeassistant.turn_on", "button.press", "input_button.press", "cover.open_cover", "lock.lock", "valve.open_valve"},
-		Description: "Turns on, opens, presses, or starts a device or entity. For locks this locks. Works across light, switch, fan, cover, lock, media_player and more — prefer this over call_home_service for simple on/open commands.",
+		OnOff:       "on",
+		Description: "Turns on, opens, presses, or starts a device or entity. For locks this locks. Works across light, switch, fan, cover, lock, media_player and more — prefer this over call_home_service for simple on/open commands. Only entities exposed to Assist are matched.",
 		Targeted:    true,
 		Slots:       deviceClassSlot(onOffDeviceClasses),
 	},
 	{
 		ToolName:    "home_turn_off",
 		Intent:      "HassTurnOff",
-		Services:    []string{"homeassistant.turn_off", "cover.close_cover", "lock.unlock", "valve.close_valve"},
-		Description: "Turns off, closes, or stops a device or entity. For locks this unlocks. Works across light, switch, fan, cover, lock, media_player and more.",
+		OnOff:       "off",
+		Description: "Turns off, closes, or stops a device or entity. For locks this unlocks. Works across light, switch, fan, cover, lock, media_player and more. Only entities exposed to Assist are matched.",
 		Targeted:    true,
 		Slots:       deviceClassSlot(onOffDeviceClasses),
 	},
@@ -157,6 +245,8 @@ var IntentCatalog = []IntentDef{
 		Description: "Sets the position of a cover or valve (0 is fully closed, 100 fully open).",
 		Domains:     []string{"cover", "valve"},
 		Targeted:    true,
+		// Upstream aborts on any matched entity that is not a cover/valve.
+		DefaultDomains: []string{"cover", "valve"},
 		Slots: append(
 			[]IntentSlot{{
 				Name:     "position",
@@ -167,13 +257,14 @@ var IntentCatalog = []IntentDef{
 		),
 	},
 	{
-		ToolName:    "home_stop_moving",
-		Intent:      "HassStopMoving",
-		Services:    []string{"cover.stop_cover", "valve.stop_valve"},
-		Description: "Stops a moving cover or valve.",
-		Domains:     []string{"cover", "valve"},
-		Targeted:    true,
-		Slots:       deviceClassSlot(coverValveDeviceClasses),
+		ToolName:       "home_stop_moving",
+		Intent:         "HassStopMoving",
+		Services:       []string{"cover.stop_cover", "valve.stop_valve"},
+		Description:    "Stops a moving cover or valve.",
+		Domains:        []string{"cover", "valve"},
+		Targeted:       true,
+		DefaultDomains: []string{"cover", "valve"},
+		Slots:          deviceClassSlot(coverValveDeviceClasses),
 	},
 	{
 		ToolName:    "home_light_set",
@@ -259,10 +350,12 @@ var IntentCatalog = []IntentDef{
 		},
 	},
 	{
-		Group:       "home_media",
-		Action:      "set_volume_relative",
-		Intent:      "HassSetVolumeRelative",
-		Services:    []string{"media_player.volume_set"},
+		Group:  "home_media",
+		Action: "set_volume_relative",
+		Intent: "HassSetVolumeRelative",
+		// "up"/"down" call the entity's volume_up/volume_down; a numeric
+		// step sets an absolute level.
+		Services:    []string{"media_player.volume_up", "media_player.volume_down", "media_player.volume_set"},
 		Description: "Increases or decreases the volume of a media player.",
 		Domains:     []string{"media_player"},
 		Targeted:    true,
@@ -302,13 +395,19 @@ var IntentCatalog = []IntentDef{
 		Group:       "home_media",
 		Action:      "search_and_play",
 		Intent:      "HassMediaSearchAndPlay",
-		Services:    []string{"media_player.play_media"},
+		Services:    []string{"media_player.search_media", "media_player.play_media"},
 		Description: "Searches for media and plays the first result on a media player.",
 		Domains:     []string{"media_player"},
 		Targeted:    true,
 		Slots: []IntentSlot{
 			{Name: "search_query", Schema: strSchema("What to search for, e.g. an artist, album or show name."), Required: true},
-			{Name: "media_class", Schema: strSchema("Optional media class to narrow the search, e.g. album, artist, playlist, tv_show, movie.")},
+			{Name: "media_class", Schema: &jsonschema.Schema{
+				Type:        "string",
+				Description: "Optional media class to narrow the search.",
+				// Upstream validates this slot with vol.In(MediaClass); any
+				// other value fails the whole call.
+				Enum: enumOf(mediaClasses),
+			}},
 		},
 	},
 	{
@@ -423,17 +522,43 @@ func deviceClassSlot(classes []string) []IntentSlot {
 // "domain" counts as a target, so a deliberate broad command still works
 // (domain: ["light"] to turn off every light) while a call carrying no
 // targeting information at all is rejected.
-func targetSchema(props map[string]*jsonschema.Schema) []*jsonschema.Schema {
+//
+// HassTurnOn/HassTurnOff (onOff) are stricter still: an area or floor only
+// narrows, and the call must also carry a name, domain or device_class.
+// Those two intents have no required domain upstream, so {area: "garage"}
+// matches every exposed entity in the garage — on a real instance, "close
+// the garage" sent that way closes both doors *and* switches off the
+// freezer plug. Asking for the device type up front costs nothing when the
+// user named one ("the garage lights" is domain light) and makes "everything
+// in the garage" an explicit list of domains rather than an accident.
+func targetSchema(props map[string]*jsonschema.Schema, onOff bool) []*jsonschema.Schema {
 	// Every targeted intent repeats these four properties, so their
 	// descriptions are kept terse: a few bytes here is a few hundred
 	// tokens across the tool list.
-	props["name"] = strSchema("Entity friendly name or alias, e.g. \"kitchen sink light\".")
-	props["area"] = strSchema("Area name, e.g. \"kitchen\"; targets everything in it.")
-	props["floor"] = strSchema("Floor name, e.g. \"upstairs\".")
+	// name also takes a list, so "the porch light and the driveway lights"
+	// is one tool call; Home Assistant's intent takes one name, so the
+	// handler runs the intent once per name.
+	props["name"] = &jsonschema.Schema{
+		Types:       []string{"string", "array"},
+		Items:       &jsonschema.Schema{Type: "string"},
+		Description: "Exact entity name or alias, or a list of them, copied from the list below when it is there.",
+	}
+	props["area"] = strSchema("Area name; targets everything this tool controls in it.")
+	props["floor"] = strSchema("Floor name; targets everything this tool controls on it.")
 	props["domain"] = &jsonschema.Schema{
 		Type:        "array",
 		Description: "Domains, e.g. [\"light\"]; narrows the other targets, or alone means every entity in those domains.",
 		Items:       &jsonschema.Schema{Type: "string"},
+	}
+	if onOff {
+		props["area"] = strSchema("Area name. Only narrows: with no name, also give domain or device_class.")
+		props["floor"] = strSchema("Floor name. Only narrows: with no name, also give domain or device_class.")
+		props["domain"].Description = "Device types, e.g. [\"light\"]. Required with area/floor when no name is given; for \"everything\" list every type meant. Alone means every exposed entity of those types. \"switch\" covers every plug and relay in scope (freezers, pumps, chargers), so to reach a lamp on a smart plug, use its name."
+		return []*jsonschema.Schema{
+			{Required: []string{"name"}},
+			{Required: []string{"domain"}},
+			{Required: []string{"device_class"}},
+		}
 	}
 	return []*jsonschema.Schema{
 		{Required: []string{"name"}},
@@ -465,7 +590,7 @@ func (d IntentDef) InputSchema() *jsonschema.Schema {
 
 	schema := &jsonschema.Schema{Type: "object", Properties: props}
 	if d.Targeted {
-		schema.AnyOf = targetSchema(props)
+		schema.AnyOf = targetSchema(props, d.OnOff != "")
 	}
 
 	for _, slot := range d.Slots {
@@ -514,7 +639,29 @@ func groupInputSchema(members []IntentDef) *jsonschema.Schema {
 		props[name] = &c
 	}
 	if targeted {
-		schema.AnyOf = targetSchema(props)
+		schema.AnyOf = targetSchema(props, false)
+	}
+	// Spell out each action's required slots as if/then, so a model that
+	// follows the schema sends set_volume with a volume_level on the first
+	// try instead of learning it from a call-time error.
+	for _, m := range members {
+		var req []string
+		for _, slot := range m.Slots {
+			if slot.Required {
+				req = append(req, slot.Name)
+			}
+		}
+		if len(req) == 0 {
+			continue
+		}
+		var action any = m.Action
+		schema.AllOf = append(schema.AllOf, &jsonschema.Schema{
+			If: &jsonschema.Schema{
+				Properties: map[string]*jsonschema.Schema{"action": {Const: &action}},
+				Required:   []string{"action"},
+			},
+			Then: &jsonschema.Schema{Required: req},
+		})
 	}
 	return schema
 }
@@ -543,15 +690,38 @@ type IntentResult struct {
 }
 
 // HandleIntent fires an intent via POST /api/intent/handle. Home Assistant
-// resolves name/area/floor slots to entities server-side.
+// resolves name/area/floor slots to entities server-side, across every
+// entity: no Assist exposure filter applies. Generated tools use
+// HandleIntentAs instead.
 func (c *Client) HandleIntent(ctx context.Context, name string, slots map[string]any) (*IntentResult, error) {
+	return c.HandleIntentAs(ctx, name, slots, "")
+}
+
+// errAssistantUnsupported is returned by HandleIntentAs when Home Assistant
+// rejects the "assistant" field, which /api/intent/handle accepts only from
+// 2026.4. Older releases validate the body with vol.Schema's default
+// PREVENT_EXTRA and answer 400 "extra keys not allowed @ data['assistant']".
+var errAssistantUnsupported = errors.New("home assistant does not accept the assistant field on /api/intent/handle")
+
+// HandleIntentAs is HandleIntent with an assistant id (e.g. "conversation").
+// Home Assistant then matches only entities exposed to that assistant, the
+// same restriction its own LLM API applies. Without it an area target
+// reaches every entity there, including configuration switches such as a
+// camera's recording toggle that Assist never exposes.
+func (c *Client) HandleIntentAs(ctx context.Context, name string, slots map[string]any, assistant string) (*IntentResult, error) {
 	payload := map[string]any{"name": name}
 	if len(slots) > 0 {
 		payload["data"] = slots
 	}
+	if assistant != "" {
+		payload["assistant"] = assistant
+	}
 
 	body, err := c.doRequest(ctx, "POST", "/api/intent/handle", nil, payload)
 	if err != nil {
+		if assistant != "" && strings.Contains(err.Error(), "status 400") && strings.Contains(err.Error(), "assistant") {
+			return nil, errAssistantUnsupported
+		}
 		return nil, fmt.Errorf("handling intent %s: %w", name, err)
 	}
 

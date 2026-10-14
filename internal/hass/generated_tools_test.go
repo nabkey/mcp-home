@@ -63,7 +63,13 @@ func connectWithDeny(t *testing.T, fake *fakeHA, deny []string) *mcp.ClientSessi
 	if err != nil {
 		t.Fatalf("NewTools: %v", err)
 	}
+	return connectTools(t, tools)
+}
 
+// connectTools registers generated tools from tools and returns a connected
+// client session.
+func connectTools(t *testing.T, tools *Tools) *mcp.ClientSession {
+	t.Helper()
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	tools.RegisterGenerated(context.Background(), server)
 
@@ -215,7 +221,7 @@ func TestGeneratedIntentToolCallsIntentEndpoint(t *testing.T) {
 
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "home_turn_on",
-		Arguments: map[string]any{"area": "kitchen"},
+		Arguments: map[string]any{"area": "kitchen", "domain": []any{"light"}},
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -226,6 +232,87 @@ func TestGeneratedIntentToolCallsIntentEndpoint(t *testing.T) {
 	text, _ := result.Content[0].(*mcp.TextContent)
 	if text == nil || !contains(text.Text, "Done") {
 		t.Errorf("result = %v, want the intent speech", result.Content)
+	}
+	// Matching is limited to Assist-exposed entities, as upstream's LLM
+	// API does; without it an area reaches config switches too.
+	if fake.lastIntentBody["assistant"] != "conversation" {
+		t.Errorf("assistant = %v, want conversation", fake.lastIntentBody["assistant"])
+	}
+}
+
+// HassTurnOn/Off have no required domain, so an area alone would hit every
+// exposed device there. It must carry a name, domain or device_class.
+func TestOnOffAreaAloneIsRejected(t *testing.T) {
+	fake := &fakeHA{
+		states:   `[{"entity_id":"light.kitchen","state":"on"}]`,
+		services: `[]`,
+	}
+	session := connect(t, fake)
+	for _, args := range []map[string]any{
+		{"area": "garage"},
+		{"floor": "upstairs"},
+		// HA treats name "all" as no name, so it must not unlock the rule.
+		{"area": "garage", "name": "all"},
+	} {
+		fake.lastIntentBody = nil
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "home_turn_off", Arguments: args})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if !result.IsError {
+			t.Errorf("%v: accepted an area/floor-only target", args)
+		}
+		if fake.lastIntentBody != nil {
+			t.Errorf("%v: reached Home Assistant: %v", args, fake.lastIntentBody)
+		}
+	}
+}
+
+// Older Home Assistant rejects the assistant field with a 400; the tool must
+// fall back rather than fail every call.
+func TestIntentFallsBackWhenAssistantUnsupported(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/states":
+			_, _ = w.Write([]byte(`[{"entity_id":"light.kitchen","state":"on"}]`))
+		case "/api/services":
+			_, _ = w.Write([]byte(`[]`))
+		case "/api/intent/handle":
+			var body map[string]any
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &body)
+			bodies = append(bodies, body)
+			if _, ok := body["assistant"]; ok {
+				http.Error(w, "Message format incorrect: extra keys not allowed @ data['assistant']", http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{"speech":{"plain":{"speech":"Done"}},"data":{"success":[{"id":"light.kitchen"}]}}`))
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	tools, err := NewTools(srv.URL, "t", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := connectTools(t, tools)
+	for i := 0; i < 2; i++ {
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+			Name: "home_light_set", Arguments: map[string]any{"name": "Kitchen", "brightness": 30},
+		})
+		if err != nil || result.IsError {
+			t.Fatalf("call %d failed: %v %v", i, err, result)
+		}
+	}
+	// First call tries with assistant and retries without; the second goes
+	// straight to the legacy form.
+	if len(bodies) != 3 {
+		t.Fatalf("intent posts = %d (%v), want 3", len(bodies), bodies)
+	}
+	if _, ok := bodies[2]["assistant"]; ok {
+		t.Error("kept sending assistant after Home Assistant rejected it")
 	}
 }
 
@@ -284,13 +371,81 @@ func TestRegisterGeneratedHonoursServiceDenyPolicy(t *testing.T) {
 	t.Cleanup(func() { _ = session.Close() })
 
 	registered := toolNames(t, session)
-	if _, ok := registered["home_turn_off"]; ok {
-		t.Error("home_turn_off registered despite lock.unlock being denied; it can dispatch lock.unlock")
+	// home_turn_off stays, but can never reach a lock: the domain slot is
+	// pinned to the domains whose services are all permitted.
+	if _, ok := registered["home_turn_off"]; !ok {
+		t.Fatal("home_turn_off withheld; a lock.unlock deny should only remove locks from it")
+	}
+	for _, args := range []map[string]any{
+		{"name": "Front Door"},
+		{"name": "Front Door", "domain": []any{"lock", "light"}},
+	} {
+		fake.lastIntentBody = nil
+		if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "home_turn_off", Arguments: args}); err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		data, _ := fake.lastIntentBody["data"].(map[string]any)
+		doms := stringSlice(data["domain"])
+		if len(doms) == 0 {
+			t.Fatalf("%v: no domain pin sent: %v", args, fake.lastIntentBody)
+		}
+		for _, d := range doms {
+			if d == "lock" {
+				t.Errorf("%v: domain pin %v still includes lock", args, doms)
+			}
+		}
+	}
+	// Asking only for a denied domain is refused locally.
+	fake.lastIntentBody = nil
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "home_turn_off", Arguments: map[string]any{"domain": []any{"lock"}}})
+	if err != nil || !res.IsError || fake.lastIntentBody != nil {
+		t.Errorf("domain [lock] should be refused before reaching HA: %v %v", res, fake.lastIntentBody)
 	}
 	// Intents that cannot reach the denied service are unaffected.
 	for _, want := range []string{"home_turn_on", "home_light_set", "home_vacuum_start"} {
 		if _, ok := registered[want]; !ok {
 			t.Errorf("%s should be unaffected by a lock.unlock deny", want)
+		}
+	}
+}
+
+// homeassistant.turn_off dispatches <domain>.turn_off, so a deny on
+// switch.turn_off must keep home_turn_off away from switches. Checking only
+// homeassistant.turn_off let it through.
+func TestOnOffDenyFollowsTheDomainService(t *testing.T) {
+	for _, tc := range []struct {
+		deny      []string
+		dir       string
+		forbidden []string
+		withheld  bool
+	}{
+		{deny: []string{"switch.turn_off"}, dir: "off", forbidden: []string{"switch"}},
+		{deny: []string{"script.alert"}, dir: "on", forbidden: []string{"script"}},
+		{deny: []string{"cover.open_cover"}, dir: "on", forbidden: []string{"cover"}},
+		{deny: []string{"button.press"}, dir: "on", forbidden: []string{"button"}},
+		{deny: []string{"homeassistant.turn_off"}, dir: "off", forbidden: []string{"light", "switch", "fan", "media_player"}},
+		{deny: []string{"*.*"}, dir: "on", withheld: true},
+	} {
+		tools, err := NewTools("http://localhost", "t", tc.deny)
+		if err != nil {
+			t.Fatal(err)
+		}
+		allowed, narrowed := tools.onOffAllowed(tc.dir)
+		if tc.withheld {
+			if len(allowed) != 0 {
+				t.Errorf("%v: allowed %v, want nothing", tc.deny, allowed)
+			}
+			continue
+		}
+		if !narrowed {
+			t.Errorf("%v: not narrowed", tc.deny)
+		}
+		for _, f := range tc.forbidden {
+			for _, a := range allowed {
+				if a == f {
+					t.Errorf("%v: %s still allowed for turn_%s", tc.deny, f, tc.dir)
+				}
+			}
 		}
 	}
 }
