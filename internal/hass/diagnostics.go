@@ -38,6 +38,13 @@ func (c *WebsocketClient) RepairsListIssues() (any, error) {
 	return c.wsCommandResult("repairs/list_issues")
 }
 
+// SystemLog returns the deduplicated recent warnings and errors Home
+// Assistant keeps in memory (system_log/list). Unlike /api/error_log it works
+// when logging to file is off, which is the default on Home Assistant OS.
+func (c *WebsocketClient) SystemLog() ([]map[string]any, error) {
+	return c.listResultMaps("system_log/list")
+}
+
 // PersistentNotifications returns Home Assistant's active persistent
 // notifications.
 func (c *WebsocketClient) PersistentNotifications() (any, error) {
