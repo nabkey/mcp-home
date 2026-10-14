@@ -1,6 +1,7 @@
 package hass
 
 import (
+	"encoding/json"
 	"sort"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -56,6 +57,72 @@ func stringList(v any) []string {
 		case map[string]any:
 			if s, ok := x["value"].(string); ok {
 				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+// selectLabels renders {value, label} select options as "value = label"
+// pairs, or "" when no option carries a label different from its value.
+func selectLabels(v any) string {
+	items, ok := v.([]any)
+	if !ok {
+		return ""
+	}
+	var parts []string
+	labelled := false
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		value, _ := m["value"].(string)
+		label, _ := m["label"].(string)
+		if value == "" {
+			continue
+		}
+		if label != "" && label != value {
+			labelled = true
+			parts = append(parts, value+" = "+label)
+		} else {
+			parts = append(parts, value)
+		}
+	}
+	if !labelled {
+		return ""
+	}
+	return joinComma(parts)
+}
+
+// entityFilterDomains collects the domains an entity selector is limited to,
+// from its filter (one object or a list) or the legacy top-level domain key.
+func entityFilterDomains(cfg map[string]any) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(v any) {
+		var doms []string
+		switch x := v.(type) {
+		case string:
+			doms = []string{x}
+		case []any:
+			doms = stringList(x)
+		}
+		for _, d := range doms {
+			if d != "" && !seen[d] {
+				seen[d] = true
+				out = append(out, d)
+			}
+		}
+	}
+	add(cfg["domain"])
+	switch f := cfg["filter"].(type) {
+	case map[string]any:
+		add(f["domain"])
+	case []any:
+		for _, item := range f {
+			if m, ok := item.(map[string]any); ok {
+				add(m["domain"])
 			}
 		}
 	}
@@ -183,7 +250,11 @@ func SelectorToSchema(sel map[string]any) *jsonschema.Schema {
 		}
 
 	case "entity":
-		return wrapMultiple(cfg, &jsonschema.Schema{Type: "string", Format: "entity_id"})
+		s := wrapMultiple(cfg, &jsonschema.Schema{Type: "string", Format: "entity_id"})
+		if doms := entityFilterDomains(cfg); len(doms) > 0 {
+			s.Description = "Entity id in domain " + joinComma(doms) + " (e.g. " + doms[0] + ".example)."
+		}
+		return s
 
 	case "language":
 		if opts := stringList(cfg["languages"]); len(opts) > 0 {
@@ -219,6 +290,10 @@ func SelectorToSchema(sel map[string]any) *jsonschema.Schema {
 		}
 		if v, ok := numFromConfig(cfg, "max"); ok {
 			s.Maximum = ptrFloat(v)
+		}
+		// "Duration 15" means nothing without knowing it is minutes.
+		if unit, _ := cfg["unit_of_measurement"].(string); unit != "" {
+			s.Description = "(" + unit + ")"
 		}
 		return s
 
@@ -256,19 +331,52 @@ func SelectorToSchema(sel map[string]any) *jsonschema.Schema {
 		// string while rejecting every value. A select whose options we cannot
 		// read (custom_value with no list, or an unfamiliar option shape)
 		// degrades to an unconstrained string instead.
+		//
+		// custom_value means the options are suggestions: Home Assistant
+		// accepts any string. Generated tools validate their own input, so
+		// an enum there would reject the values the field exists to take.
+		// The suggestions go into the description instead.
 		opts := stringList(cfg["options"])
 		item := &jsonschema.Schema{Type: "string"}
+		hint := selectLabels(cfg["options"])
 		if len(opts) > 0 {
-			item.Enum = enumOf(opts)
+			if boolFromConfig(cfg, "custom_value") {
+				if hint == "" {
+					hint = joinComma(opts)
+				}
+				hint = "Suggested: " + hint + "; other values are accepted."
+			} else {
+				item.Enum = enumOf(opts)
+				if hint != "" {
+					hint = "Options: " + hint + "."
+				}
+			}
 		}
 		if boolFromConfig(cfg, "multiple") {
 			return &jsonschema.Schema{
 				Type:        "array",
 				Items:       item,
 				UniqueItems: true,
+				Description: hint,
 			}
 		}
+		item.Description = hint
 		return item
+
+	case "action":
+		// Like condition: a list of action objects (cv.SCRIPT_SCHEMA).
+		return &jsonschema.Schema{
+			Type: "array",
+			Items: &jsonschema.Schema{
+				Type:                 "object",
+				AdditionalProperties: &jsonschema.Schema{},
+			},
+		}
+
+	case "area", "device", "floor", "label":
+		// Upstream degrades these to a plain string. Saying which registry
+		// id is wanted keeps a model from passing "Kitchen" for kitchen.
+		return wrapMultiple(cfg, &jsonschema.Schema{Type: "string", Format: kind + "_id"})
 
 	case "target":
 		return &jsonschema.Schema{
@@ -392,9 +500,21 @@ func addServiceField(name string, cfg map[string]any, props map[string]*jsonsche
 	}
 	sel, _ := cfg["selector"].(map[string]any)
 	schema := SelectorToSchema(sel)
-	schema.Description = fieldDescription(name, cfg)
+	// The selector may have produced a hint of its own (unit, option
+	// labels, entity domain); keep it after the field's description.
+	desc := fieldDescription(name, cfg)
+	if schema.Description != "" {
+		desc += " " + schema.Description
+	}
+	schema.Description = desc
 	if ex, ok := cfg["example"]; ok {
 		schema.Examples = []any{ex}
+	}
+	// A script field's default tells the model what leaving it out does.
+	if def, ok := cfg["default"]; ok && def != nil {
+		if raw, err := json.Marshal(def); err == nil {
+			schema.Default = raw
+		}
 	}
 	props[name] = schema
 	if boolFromConfig(cfg, "required") {
