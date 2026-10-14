@@ -126,7 +126,7 @@ The streamable HTTP transport runs **stateless** (`internal/server/http.go`), wh
 - `internal/lists/` — To-do list management tools. Depends on the HA client.
 - `internal/media/` — Sonarr/Radarr client and MCP tools.
 - `internal/frigate/` — Frigate NVR client and MCP tools.
-- `internal/esphome/` — ESPHome dashboard client (HTTP + WebSocket command channels) and MCP tools.
+- `internal/esphome/` — ESPHome dashboard client (`client.go`, `/ws` command channel + HTTP firmware download), output cleaning (`lines.go`), failure diagnosis (`diagnose.go`), post-flash verification (`verify.go`) and MCP tools.
 
 ### MCP Tool Registration Pattern
 
@@ -166,7 +166,18 @@ Each integration has its own client that handles HTTP/WebSocket communication:
 - **Sonarr** (`SONARR_URL`, `SONARR_API_KEY`) — `/api/v3/` endpoints, `X-Api-Key` header auth.
 - **Radarr** (`RADARR_URL`, `RADARR_API_KEY`) — Same *arr API pattern as Sonarr.
 - **Frigate** (`FRIGATE_URL`) — No auth, REST API for config, events, and JPEG snapshots.
-- **ESPHome** (`ESPHOME_URL`, optional `ESPHOME_PASSWORD`) — ESPHome Device Builder dashboard. All operations go over the single multiplexed `/ws` command socket (`{command, message_id, args}` → `ResultMessage` / streaming `EventMessage{event:"output"|"result"}` / `ErrorMessage`): `devices/list`, `config/get_secrets`, `devices/get_config`, `devices/update_config` (falls back to `devices/create` on `not_found`), `devices/validate` and `devices/logs` (streaming), `firmware/get_binaries` + `firmware/download_token` (binary then fetched over HTTP `/api/firmware/download?token=`). Compile and upload can run for minutes — longer than an MCP request stays open — so they use the dashboard's **async job queue**: `firmware/compile` / `firmware/upload` return a `FirmwareJob` immediately, and the caller polls `firmware/get_job` until the job is terminal (`completed`/`failed`/`cancelled`). `get_job` deliberately returns terminal jobs with an empty `output` (the log is flushed to a per-job sidecar), so `get_esphome_job` fetches the build/flash log separately via `firmware/follow_job` once the job is done — that command replays the sidecar as `output` events then a terminal `result`, reusing the same streaming reader as validate/logs. This is the same poll pattern the MCP Tasks extension would model at the protocol layer, done at the application layer because the go-sdk in use doesn't implement Tasks yet. Auth: a dashboard reporting `requires_auth` gets an `auth/login` handshake on `/ws`; an add-on on its exposed port reports `requires_auth: false`.
+- **ESPHome** (`ESPHOME_URL`, optional `ESPHOME_PASSWORD`) — ESPHome Device Builder dashboard (source: `esphome/device-builder`, not `esphome/esphome`; the protocol facts below were checked against it). All operations go over the single multiplexed `/ws` command socket (`{command, message_id, args}` → `ResultMessage` / streaming `EventMessage{event:"output"|"result"}` / `ErrorMessage`), one short-lived session per operation: `devices/list`, `config/get_secrets`, `devices/get_config`, `devices/update_config` (passes `expected` when overwriting so a concurrent dashboard edit fails with `precondition_failed` instead of being clobbered; falls back to `devices/create` on `not_found`), `devices/validate` (`show_secrets:false`) and `devices/logs` (streaming), `firmware/get_binaries` + `firmware/download_token` (binary then fetched over HTTP `/api/firmware/download?token=`), `firmware/get_jobs`, `firmware/cancel`. Compile and upload can run for minutes, so they use the dashboard's **async job queue**: `firmware/compile` / `firmware/upload` return a `FirmwareJob` immediately and the caller polls `firmware/get_job` until terminal (`completed`/`failed`/`cancelled`). This is the same poll pattern the MCP Tasks extension would model at the protocol layer, done at the application layer because the go-sdk in use doesn't implement Tasks yet. Auth: a dashboard reporting `requires_auth` gets an `auth/login` handshake on `/ws`; an add-on on its exposed port reports `requires_auth: false`.
+
+  Upstream behaviours the client and tools depend on (verified in device-builder source and against the live dashboard):
+  - `get_job` answers an **unknown or pruned id with a `null` result**, not an error; `Client.GetJob` turns that into `ErrJobNotFound` (otherwise a poller sees `status:""` forever). Terminal jobs come back with empty `output` (flushed to a per-job sidecar); running jobs carry their live buffer. `follow_job` replays the log then sends a terminal `result` frame `{status, exit_code, error, queued_update_armed}`.
+  - **Supersede**: submitting any firmware job cancels every other queued/running job for the same configuration, with no error text on the cancelled job. So `upload_esphome` refuses while a compile is in flight (it would cancel the build and flash the old binary) or when the latest compile failed, `compile_esphome` refuses while a flash is in flight, and `get_esphome_job` reports a cancelled job with a newer sibling as `superseded`.
+  - Jobs are **persisted across dashboard restarts**: queued/running jobs are re-queued under the same id, a running one starts over with a `dashboard restarted mid-build` marker in its log (surfaced as `restarted:true`).
+  - **Offline OTA**: a failed OTA to a device the dashboard knows is offline arms `runtime_state.queued_update` and is flashed automatically on reconnect (`queued_update_armed` in the follow_job result → diagnosis `deferred_offline`).
+  - **Output framing**: validate/logs events have their line terminator stripped, follow_job events keep theirs (bare `\r` = progress redraw). `esphome --dashboard` writes ANSI escapes as the literal text `\033`, and wraps secret-ish values (SSID, BSSID, keys) in the conceal SGR `\033[8m…\033[28m`; the dashboard redacts those only for validate, so `lines.go` redacts every stream, strips escapes, splits lines, collapses redraws and keeps the **tail** (2000 lines) while collecting error lines across the whole stream.
+  - A streaming handler that returns without a terminal frame (server-side cancel) is followed by a bare `ResultMessage{result:null}`; that is reported as incomplete, never as success. An error frame with an empty `message_id` (unparseable command) fails the call immediately.
+  - After a successful upload the dashboard **optimistically** sets `deployed_config_hash`/`deployed_version`, so they are not proof the device booted the build. `verify_esphome_device` instead reads the device's own dump_config over `devices/logs` (`ESPHome version X compiled on <time>` plus component lines), checks the version against the dashboard's, the build time against the compile job's window, the `expect` strings, and `was marked as failed` lines.
+
+  Client hardening: socket closed on context cancel (a read deadline could be overwritten), 32 MB frame cap, handshake/hello/command/stream-idle timeouts, transport failures classified (`dashboard_unreachable`, `dashboard_stalled`, `connection_lost`, `protocol_error`, `auth_failed`). Every tool error and every terminal job result carries a `diagnosis` kind and a `next_action` (`diagnose.go`); output patterns are scoped by stage so e.g. "timed out" means a package download in a build but an unreachable device in an upload. The adversarial fake dashboard in `protocol_test.go` (drops, stalls, interleaved ids, unknown events, oversize frames, giant logs, cancellation, goroutine-leak check) and the pipeline tests in `pipeline_test.go` pin all of this.
 
 All tool sets are optional — the server registers only what's configured and starts even with zero tools.
 
@@ -258,13 +269,15 @@ These are not hand-written. At startup the server queries the instance and gener
 
 | Tool | Description |
 |------|-------------|
-| `list_esphome_devices` | List dashboard devices with config file, address, online state, installed/deployed versions (`full=true` for the raw records) |
+| `list_esphome_devices` | List dashboard devices with config file, address, online state, installed/deployed versions, `queued_update` (`full=true` for the raw records) |
 | `list_esphome_secrets` | List shared secrets.yaml key names (never values) |
-| `read_esphome_file` | Read a config-dir file (device YAML, include, secrets.yaml) |
-| `write_esphome_file` | Create/overwrite a config-dir file (push YAML + includes; overwriting asks for confirmation on capable clients) |
-| `validate_esphome` | Validate a config without building (streaming) |
-| `compile_esphome` | Queue a firmware build; returns a `job_id` immediately (async) |
-| `upload_esphome` | Queue an OTA flash of the latest build; returns a `job_id` (async, destructive, asks for confirmation on capable clients) |
-| `get_esphome_job` | Poll a compile/upload job's status, progress, and output |
+| `read_esphome_file` | Read a device YAML |
+| `write_esphome_file` | Create/overwrite a device YAML; overwrite is conditional on the text read (no clobbering a concurrent edit) and asks for confirmation on capable clients; reports `missing_secrets` |
+| `validate_esphome` | Validate a config without building: `valid` true/false/null, errors, diagnosis, next_action; success output drops the resolved-config dump |
+| `compile_esphome` | Queue a firmware build; returns a `job_id` and `poll_after_seconds` (async). Refuses while the device is being flashed |
+| `upload_esphome` | Queue an OTA flash of the latest build (async, destructive, asks for confirmation on capable clients). Refuses while a compile is in flight, after a failed compile, or with no binary |
+| `get_esphome_job` | Poll a compile/upload job: progress, recent output, `restarted`; once done, success, errors, `diagnosis`, `next_action` |
+| `cancel_esphome_job` | Cancel a queued/running job |
 | `download_esphome_binary` | Confirm a built image exists; report size + SHA-256 |
-| `get_esphome_logs` | Capture live device logs for a bounded duration |
+| `get_esphome_logs` | Capture live device logs for a bounded duration (redacted), with connected / running_version / compiled_on / failed_components |
+| `verify_esphome_device` | Confirm a flash took: device answers, runs the dashboard's ESPHome version, was built by the given compile job, shows the `expect` strings, no failed components |

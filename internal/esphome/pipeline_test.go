@@ -211,6 +211,7 @@ func (f *fakeDash) dispatch(sc *srvConn, c command) {
 // the ESPHome tools backed by the fake dashboard.
 func (f *fakeDash) session(t *testing.T) *mcp.ClientSession {
 	t.Helper()
+	shrink(t, &verifyGrace, 300*time.Millisecond)
 	srv := f.serve(t)
 	tools, err := NewTools(srv.URL, "")
 	if err != nil {
@@ -577,6 +578,108 @@ func TestGetJobLogUnavailable(t *testing.T) {
 	}
 }
 
+// --- verify ---
+
+const verifyCompileStart = "2026-10-14T10:00:00Z"
+
+func verifyFake(logLines []string) *fakeDash {
+	f := newFakeDash()
+	f.addJob(Job{JobID: "c1", Configuration: "porch.yaml", JobType: "compile", Status: "completed", ExitCode: intp(0),
+		CreatedAt: "2026-10-14T09:59:59Z", StartedAt: verifyCompileStart, CompletedAt: "2026-10-14T10:03:00Z"}, nil, nil)
+	f.addJob(Job{JobID: "u1", Configuration: "porch.yaml", JobType: "upload", Status: "completed", ExitCode: intp(0),
+		CreatedAt: "2026-10-14T10:04:00Z"}, nil, nil)
+	f.logLines = logLines
+	return f
+}
+
+func deviceBoot(compiledOn string, extra ...string) []string {
+	return append([]string{
+		`\033[32mINFO Starting log output from 192.168.1.50 using esphome API\033[0m`,
+		`\033[32mINFO Successful handshake with porch @ 192.168.1.50 in 0.4s\033[0m`,
+		`[10:05:01.100]\033[0;32m[I][app:151]: ESPHome version 2026.9.1 compiled on ` + compiledOn + `\033[0m`,
+		`[10:05:01.101]\033[0;35m[C][dht:123]: DHT:\033[0m`,
+		`[10:05:01.102]\033[0;35m[C][dht:124]:   Temperature 'Porch Temperature'\033[0m`,
+		`[10:05:01.103]\033[0;35m[C][dht:125]:   Humidity 'Porch Humidity'\033[0m`,
+	}, extra...)
+}
+
+func TestVerifyNewBuild(t *testing.T) {
+	f := verifyFake(deviceBoot("2026-10-14 06:01:30 -0400"))
+	cs := f.session(t)
+	out := callJSON(t, cs, "verify_esphome_device", map[string]any{
+		"config": "porch.yaml", "compile_job_id": "u1", "expect": []string{"porch humidity"}, "timeout_seconds": 5,
+	})
+	if out["verified"] != true || out["compile_job_id"] != "c1" {
+		t.Fatalf("out = %v", out)
+	}
+}
+
+func TestVerifyStopsEarly(t *testing.T) {
+	// The fake's log stream never ends; verify must return once it has seen
+	// what it needs rather than wait out the window.
+	f := verifyFake(deviceBoot("2026-10-14 06:01:30 -0400"))
+	cs := f.session(t)
+	start := time.Now()
+	callJSON(t, cs, "verify_esphome_device", map[string]any{"config": "porch.yaml", "timeout_seconds": 30})
+	if el := time.Since(start); el > 5*time.Second {
+		t.Errorf("verify took %s; it should stop once the banner is seen", el)
+	}
+}
+
+func TestVerifyOldBuild(t *testing.T) {
+	f := verifyFake(deviceBoot("2026-10-01 06:01:30 -0400"))
+	cs := f.session(t)
+	out := callJSON(t, cs, "verify_esphome_device", map[string]any{"config": "porch.yaml", "compile_job_id": "c1", "timeout_seconds": 5})
+	if out["verified"] != false || out["diagnosis"] != "old_firmware" {
+		t.Fatalf("out = %v", out)
+	}
+}
+
+func TestVerifyMissingComponent(t *testing.T) {
+	f := verifyFake(deviceBoot("2026-10-14 06:01:30 -0400"))
+	cs := f.session(t)
+	out := callJSON(t, cs, "verify_esphome_device", map[string]any{"config": "porch.yaml", "expect": []string{"Porch Pressure"}, "timeout_seconds": 2})
+	if out["verified"] != false || out["diagnosis"] != "component_missing" {
+		t.Fatalf("out = %v", out)
+	}
+}
+
+func TestVerifyFailedComponent(t *testing.T) {
+	f := verifyFake(deviceBoot("2026-10-14 06:01:30 -0400",
+		`[10:05:01.200]\033[1;31m[E][component:204]: dht.sensor was marked as failed\033[0m`))
+	cs := f.session(t)
+	out := callJSON(t, cs, "verify_esphome_device", map[string]any{"config": "porch.yaml", "expect": []string{"marked as failed"}, "timeout_seconds": 3})
+	if out["verified"] != false || out["diagnosis"] != "component_failed" {
+		t.Fatalf("out = %v", out)
+	}
+}
+
+func TestVerifyDeviceSilent(t *testing.T) {
+	f := verifyFake([]string{
+		`\033[32mINFO Starting log output from 192.168.1.50 using esphome API\033[0m`,
+		`\033[33mWARNING Can't connect to ESPHome API for porch @ 192.168.1.50: [Errno 113] Connect call failed\033[0m`,
+		`\033[32mINFO Trying to connect to porch @ 192.168.1.50 in the background\033[0m`,
+	})
+	cs := f.session(t)
+	out := callJSON(t, cs, "verify_esphome_device", map[string]any{"config": "porch.yaml", "timeout_seconds": 1})
+	if out["verified"] != false || out["diagnosis"] != "device_not_answering" {
+		t.Fatalf("out = %v", out)
+	}
+	if !strings.Contains(fmt.Sprint(out["device"]), "Can't connect") {
+		t.Errorf("connect error not surfaced: %v", out["device"])
+	}
+}
+
+func TestVerifyRefusesUnfinishedCompile(t *testing.T) {
+	f := newFakeDash()
+	f.addJob(Job{JobID: "c1", Configuration: "porch.yaml", JobType: "compile", Status: "running"}, nil, nil)
+	cs := f.session(t)
+	text, isErr := call(t, cs, "verify_esphome_device", map[string]any{"config": "porch.yaml", "compile_job_id": "c1"})
+	if !isErr || !strings.Contains(text, "running") {
+		t.Fatalf("got %v %s", isErr, text)
+	}
+}
+
 func TestLogsOfflineDevice(t *testing.T) {
 	f := newFakeDash()
 	f.logLines = []string{
@@ -587,5 +690,59 @@ func TestLogsOfflineDevice(t *testing.T) {
 	out := callJSON(t, cs, "get_esphome_logs", map[string]any{"config": "porch.yaml", "timeout_seconds": 1})
 	if out["connected"] != false || out["diagnosis"] != "device_unreachable" || out["connect_error"] == nil {
 		t.Fatalf("out = %v", out)
+	}
+}
+
+// --- the whole path ---
+
+func TestPipelineHappyPath(t *testing.T) {
+	// A model taking a device from "add humidity" to verified, using only
+	// what each tool returns to decide the next call.
+	f := newFakeDash()
+	f.files["porch.yaml"] = "esphome:\n  name: porch\n"
+	f.secrets = []string{"wifi_ssid", "wifi_password"}
+	f.validateLines = []string{`\033[32mINFO Configuration is valid!\033[0m`}
+	f.binaries = []Binary{{File: "firmware.ota.bin", Type: "ota"}}
+	cs := f.session(t)
+
+	w := callJSON(t, cs, "write_esphome_file", map[string]any{"file": "porch.yaml", "content": "esphome:\n  name: porch\nsensor:\n  - platform: dht\n    humidity:\n      name: Porch Humidity\n"})
+	if !strings.Contains(fmt.Sprint(w["next_action"]), "validate_esphome") {
+		t.Fatalf("write: %v", w)
+	}
+	v := callJSON(t, cs, "validate_esphome", map[string]any{"config": "porch.yaml"})
+	if v["valid"] != true {
+		t.Fatalf("validate: %v", v)
+	}
+	c := callJSON(t, cs, "compile_esphome", map[string]any{"config": "porch.yaml"})
+	compileID := c["job_id"].(string)
+
+	// The build runs and finishes.
+	now := time.Now().UTC()
+	f.mu.Lock()
+	j := f.jobs[compileID]
+	j.Status, j.ExitCode = "completed", intp(0)
+	j.StartedAt = now.Add(-time.Minute).Format(time.RFC3339Nano)
+	j.CompletedAt = now.Format(time.RFC3339Nano)
+	j.log = []string{"INFO Successfully compiled program.\n"}
+	f.mu.Unlock()
+	g := callJSON(t, cs, "get_esphome_job", map[string]any{"job_id": compileID})
+	if g["success"] != true || !strings.Contains(fmt.Sprint(g["next_action"]), "upload_esphome") {
+		t.Fatalf("get compile: %v", g)
+	}
+
+	u := callJSON(t, cs, "upload_esphome", map[string]any{"config": "porch.yaml"})
+	uploadID := u["job_id"].(string)
+	f.mu.Lock()
+	f.jobs[uploadID].Status, f.jobs[uploadID].ExitCode = "completed", intp(0)
+	f.jobs[uploadID].log = []string{"INFO OTA successful\n"}
+	f.logLines = deviceBoot(now.Add(-30 * time.Second).Format("2006-01-02 15:04:05 -0700"))
+	f.mu.Unlock()
+	g = callJSON(t, cs, "get_esphome_job", map[string]any{"job_id": uploadID})
+	if !strings.Contains(fmt.Sprint(g["next_action"]), "verify_esphome_device") {
+		t.Fatalf("get upload: %v", g)
+	}
+	vr := callJSON(t, cs, "verify_esphome_device", map[string]any{"config": "porch.yaml", "compile_job_id": uploadID, "expect": []string{"Porch Humidity"}, "timeout_seconds": 5})
+	if vr["verified"] != true {
+		t.Fatalf("verify: %v", vr)
 	}
 }

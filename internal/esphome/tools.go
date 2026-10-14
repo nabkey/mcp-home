@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,6 +23,11 @@ const (
 	defaultLogSeconds = 30
 	// maxLogSeconds caps how long a logs stream may run.
 	maxLogSeconds = 120
+	// defaultVerifySeconds / maxVerifySeconds bound verify_esphome_device's
+	// log capture. It ends early once it has what it needs; the window is
+	// long enough to ride out a post-flash reboot.
+	defaultVerifySeconds = 45
+	maxVerifySeconds     = 120
 	// displayBytes caps inline output in one result.
 	displayBytes = 8000
 	// failureTailLines / successTailLines are how many trailing output lines
@@ -65,8 +73,10 @@ func (t *Tools) Register(server *mcp.Server) {
 	t.registerCompile(server)
 	t.registerUpload(server)
 	t.registerGetJob(server)
+	t.registerCancelJob(server)
 	t.registerDownload(server)
 	t.registerLogs(server)
+	t.registerVerify(server)
 }
 
 // errResult renders a client error with its next action.
@@ -663,6 +673,29 @@ func (t *Tools) newerJob(ctx context.Context, job *Job) *Job {
 	return newest
 }
 
+// --- cancel_esphome_job ---
+
+func (t *Tools) registerCancelJob(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "cancel_esphome_job",
+		Description: "Cancel a queued or running compile/upload job. A queued job is cancelled at once; a running one is signalled and may still finish, so poll get_esphome_job for its final status. Cancelling an upload mid-transfer leaves the device on its previous firmware.",
+		Annotations: mcputil.Destructive(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args jobArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("job_id", args.JobID); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		if err := t.client.CancelJob(ctx, args.JobID); err != nil {
+			return errResult(err), nil, nil
+		}
+		out := map[string]any{"job_id": args.JobID, "cancel_requested": true}
+		if job, err := t.client.GetJob(ctx, args.JobID); err == nil {
+			out["status"] = job.Status
+		}
+		out["next_action"] = "Poll get_esphome_job until done is true to see the final status."
+		return jsonResult(out), nil, nil
+	})
+}
+
 // --- get_esphome_logs ---
 
 type logsArgs struct {
@@ -726,6 +759,179 @@ func logsView(res *CommandResult, err error, facts *logFacts) map[string]any {
 		out["next_action"] = d.Next
 	}
 	return out
+}
+
+// --- verify_esphome_device ---
+
+type verifyArgs struct {
+	Config         string   `json:"config" jsonschema:"The device configuration filename (e.g. pump.yaml)"`
+	CompileJobID   string   `json:"compile_job_id,omitempty" jsonschema:"The job_id of the compile whose build should be on the device (an upload job_id also works: its preceding successful compile is used). Without it only the ESPHome version is checked, not that this particular build is running."`
+	Expect         []string `json:"expect,omitempty" jsonschema:"Text that must appear in the device's startup dump to count as working, e.g. the name of a newly added sensor ('Porch Humidity'). Case-insensitive."`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty" jsonschema:"How long to wait for the device to answer and print its startup dump (default 45, max 120). Returns early once everything is seen."`
+}
+
+func (t *Tools) registerVerify(server *mcp.Server) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "verify_esphome_device",
+		Description: "After a flash, confirm the device actually runs the new build: it connects to the device, reads the version and build time from its startup dump, checks it matches the compile job and the dashboard's ESPHome version, that every expected text (e.g. a new sensor's name) appears, and that no component failed setup. " +
+			"The dashboard's own deployed_version is set optimistically when an upload finishes, so it is not proof. Returns verified, the individual checks, and next_action.",
+		Annotations: mcputil.ReadOnly(),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args verifyArgs) (*mcp.CallToolResult, any, error) {
+		if err := validate.Identifier("config", args.Config); err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		dev, err := t.client.FindDevice(ctx, args.Config)
+		if err != nil {
+			return errResult(err), nil, nil
+		}
+		if dev == nil {
+			return mcputil.Errorf("the dashboard has no device with configuration %q. Call list_esphome_devices for the exact filenames.", args.Config), nil, nil
+		}
+		in := verifyInput{dashboardVersion: str(dev["current_version"])}
+		rs := runtimeState(dev)
+		in.queuedUpdate, _ = rs["queued_update"].(bool)
+
+		var compileJob *Job
+		if args.CompileJobID != "" {
+			if err := validate.Identifier("compile_job_id", args.CompileJobID); err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			compileJob, err = t.resolveCompileJob(ctx, args.Config, args.CompileJobID)
+			if err != nil {
+				return errResult(err), nil, nil
+			}
+			if !compileJob.Succeeded() {
+				return mcputil.Errorf("compile job %s is %s, not completed, so there is no build of it to verify. Poll get_esphome_job %s; verify after it succeeds and has been uploaded.", compileJob.JobID, compileJob.Status, compileJob.JobID), nil, nil
+			}
+			in.buildStart = parseJobTime(compileJob.StartedAt)
+			in.buildEnd = parseJobTime(compileJob.CompletedAt)
+		}
+
+		secs := clampSeconds(args.TimeoutSeconds, defaultVerifySeconds, maxVerifySeconds)
+		logCtx, cancel := context.WithTimeout(ctx, time.Duration(secs)*time.Second)
+		defer cancel()
+		facts := newLogFacts(args.Expect)
+		res, err := t.captureForVerify(logCtx, args.Config, facts)
+		if err != nil && res == nil {
+			return errResult(err), nil, nil
+		}
+		in.facts = facts
+
+		verified, checks, d := verdict(in)
+		out := map[string]any{
+			"config":      args.Config,
+			"verified":    verified,
+			"checks":      checks,
+			"diagnosis":   d.Kind,
+			"next_action": d.Next,
+			"device":      facts.summary(),
+			"dashboard": map[string]any{
+				"state":            rs["state"],
+				"esphome_version":  in.dashboardVersion,
+				"deployed_version": rs["deployed_version"],
+				"queued_update":    in.queuedUpdate,
+				"note":             "deployed_version is recorded optimistically when an upload completes; the device fields above are what the device itself reported.",
+			},
+		}
+		if compileJob != nil {
+			out["compile_job_id"] = compileJob.JobID
+		}
+		if !verified {
+			setOutput(out, res.Lines, 40)
+		}
+		if err != nil {
+			out["error"] = explainErr(err)
+		}
+		return jsonResult(out), nil, nil
+	})
+}
+
+// verifyGrace is how long verify keeps reading after it has seen everything
+// it was looking for, so the rest of the device's dump_config (where failed
+// components are reported) arrives too. A variable so tests can shrink it.
+var verifyGrace = 3 * time.Second
+
+// captureForVerify reads device logs until the window ends or, once the
+// facts are complete, for verifyGrace longer.
+func (t *Tools) captureForVerify(ctx context.Context, cfg string, facts *logFacts) (*CommandResult, error) {
+	graceCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	var (
+		mu    sync.Mutex
+		timer *time.Timer
+		fired atomic.Bool
+	)
+	defer func() {
+		mu.Lock()
+		if timer != nil {
+			timer.Stop()
+		}
+		mu.Unlock()
+	}()
+	until := func() bool {
+		if facts.complete() {
+			mu.Lock()
+			if timer == nil {
+				timer = time.AfterFunc(verifyGrace, func() { fired.Store(true); stop() })
+			}
+			mu.Unlock()
+		}
+		return false
+	}
+	res, err := t.client.Logs(graceCtx, cfg, LogOptions{Observe: facts.observe, Until: until})
+	if err != nil && fired.Load() && errors.Is(err, context.Canceled) && ctx.Err() == nil {
+		// Our own grace timer ended the capture: a normal stop.
+		err = nil
+		if res != nil {
+			res.Stopped = true
+		}
+	}
+	return res, err
+}
+
+// resolveCompileJob returns the compile job to verify against. Given an
+// upload job, it picks the newest successful compile for the same
+// configuration created before that upload.
+func (t *Tools) resolveCompileJob(ctx context.Context, cfg, jobID string) (*Job, error) {
+	job, err := t.client.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if job.Configuration != "" && job.Configuration != cfg {
+		return nil, fmt.Errorf("job %s belongs to %s, not %s", jobID, job.Configuration, cfg)
+	}
+	if job.JobType != "upload" {
+		return job, nil
+	}
+	jobs, err := t.client.GetJobs(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	var best *Job
+	for i := range jobs {
+		j := &jobs[i]
+		if (j.JobType == "compile" || j.JobType == "install") && j.Succeeded() && j.CreatedAt <= job.CreatedAt {
+			if best == nil || j.CreatedAt > best.CreatedAt {
+				best = j
+			}
+		}
+	}
+	if best == nil {
+		return nil, errors.New("no successful compile precedes upload job " + jobID + " in the dashboard's history; pass the compile job_id instead")
+	}
+	return best, nil
+}
+
+func parseJobTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // --- download_esphome_binary ---
