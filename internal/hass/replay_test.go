@@ -18,6 +18,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// shift maps a requested time onto the capture's timeline. Tools under replay
+// run on the capture clock (Tools.now), so this is the identity; tools on the
+// wall clock (the baseline code had no injectable clock) are shifted back by
+// how long ago the capture was taken.
+var replayWallClock = false
+
 // A replay of a Home Assistant instance: the raw REST/WebSocket payloads the
 // tools consume, served by an httptest server so a question set can be run
 // end to end through the real MCP tool handlers and its result sizes counted.
@@ -46,6 +52,9 @@ type replayFixture struct {
 }
 
 func (f *replayFixture) shift(t time.Time) time.Time {
+	if !replayWallClock {
+		return t
+	}
 	return t.Add(-time.Since(f.now))
 }
 
@@ -293,6 +302,7 @@ func replaySession(t *testing.T, f *replayFixture) *mcp.ClientSession {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tools.now = func() time.Time { return f.now }
 	server := mcp.NewServer(&mcp.Implementation{Name: "replay", Version: "0"}, nil)
 	tools.Register(server)
 	st, ct := mcp.NewInMemoryTransports()
@@ -380,6 +390,9 @@ func TestReplayLiveCaptures(t *testing.T) {
 	}
 	f := loadReplayDir(t, dir)
 	cs := replaySession(t, f)
+	t.Log("baseline call patterns:")
+	logOutcomes(t, runQuestions(t, cs, baselineQuestions()))
+	t.Log("current call patterns:")
 	outs := runQuestions(t, cs, liveQuestions())
 	logOutcomes(t, outs)
 	if os.Getenv("HASS_REPLAY_DUMP") != "" {

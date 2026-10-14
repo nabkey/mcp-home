@@ -1,8 +1,9 @@
 package hass
 
-// liveQuestions is the household question set, as the calls a model makes to
-// answer each one against the live instance's entity ids.
-func liveQuestions() []replayQuestion {
+// baselineQuestions is the household question set as a model answered it with
+// the tools before results were shaped (no area, device_class or state filter;
+// statistics by id only). Kept to show how those call patterns fare now.
+func baselineQuestions() []replayQuestion {
 	return []replayQuestion{
 		{"Is anyone home?", []replayCall{
 			{"get_home_states", map[string]any{"domain": "person"}},
@@ -49,6 +50,68 @@ func liveQuestions() []replayQuestion {
 		}},
 		{"What time zone/version is HA on?", []replayCall{
 			{"get_home_config", map[string]any{}},
+		}},
+		{"Overview: unfiltered states", []replayCall{
+			{"get_home_states", map[string]any{}},
+		}},
+		{"Overview: unfiltered registry", []replayCall{
+			{"get_home_registry", map[string]any{}},
+		}},
+	}
+}
+
+// liveQuestions is the same question set as a model answers it with the
+// current tools, following their descriptions.
+func liveQuestions() []replayQuestion {
+	return []replayQuestion{
+		{"Is anyone home?", []replayCall{
+			{"get_home_states", map[string]any{"domain": "person"}},
+		}},
+		{"Which lights are on?", []replayCall{
+			{"get_home_states", map[string]any{"domain": "light", "state": "on"}},
+		}},
+		{"Did the garage close after we left?", []replayCall{
+			{"get_home_events", map[string]any{"domain": "cover,person", "hours": 24}},
+		}},
+		{"Why was the heating on all night?", []replayCall{
+			{"get_home_states", map[string]any{"search": "heat", "device_class": "power"}},
+			{"get_state_history", map[string]any{"entity_id": "sensor.heat_pump_power_minute_average,sensor.electric_heater_power_minute_average", "hours": 12}},
+		}},
+		{"What's using the most power this week?", []replayCall{
+			{"get_long_term_statistics", map[string]any{"search": "energy_today", "hours": 168}},
+		}},
+		{"How warm is Norah's room?", []replayCall{
+			{"get_home_states", map[string]any{"search": "norah", "device_class": "temperature"}},
+		}},
+		{"Is the car charging?", []replayCall{
+			{"get_home_states", map[string]any{"search": "charg"}},
+		}},
+		{"Any doors or windows open?", []replayCall{
+			{"get_home_states", map[string]any{"device_class": "door,window,garage_door,garage,opening", "state": "on,open"}},
+		}},
+		{"What's on the calendar this week?", []replayCall{
+			{"get_calendar_events", map[string]any{}},
+		}},
+		{"What happened in the last hour?", []replayCall{
+			{"get_home_events", map[string]any{"hours": 1}},
+		}},
+		{"What happened at home today?", []replayCall{
+			{"get_home_events", map[string]any{"hours": 24}},
+		}},
+		{"What's on in the kitchen?", []replayCall{
+			{"get_home_states", map[string]any{"area": "kitchen"}},
+		}},
+		{"Is Home Assistant healthy?", []replayCall{
+			{"get_diagnostics", map[string]any{}},
+		}},
+		{"What time zone/version is HA on?", []replayCall{
+			{"get_home_config", map[string]any{}},
+		}},
+		{"Overview: unfiltered states", []replayCall{
+			{"get_home_states", map[string]any{}},
+		}},
+		{"Overview: unfiltered registry", []replayCall{
+			{"get_home_registry", map[string]any{}},
 		}},
 	}
 }

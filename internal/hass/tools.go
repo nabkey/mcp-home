@@ -2,7 +2,11 @@ package hass
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +17,16 @@ import (
 // Tools holds a set of Home Assistant MCP tools configured with a client.
 type Tools struct {
 	client *Client
+	// now is the clock time windows are measured from; nil means time.Now.
+	// Tests replaying a captured instance pin it to the capture time.
+	now func() time.Time
+}
+
+func (t *Tools) clock() time.Time {
+	if t.now != nil {
+		return t.now()
+	}
+	return time.Now()
 }
 
 // NewTools creates a new Tools instance. denyServices is an optional list of
@@ -63,69 +77,121 @@ func (t *Tools) Register(server *mcp.Server) {
 // --- get_home_states ---
 
 type getStatesArgs struct {
-	Domain     string `json:"domain,omitempty" jsonschema:"Domain(s) to include, comma-separated (e.g. light or light,switch,climate)."`
-	EntityID   string `json:"entity_id,omitempty" jsonschema:"Exact entity id(s), comma-separated (e.g. light.kitchen,sensor.outdoor_temp)."`
-	Search     string `json:"search,omitempty" jsonschema:"Case-insensitive substring matched against entity_id and friendly name (e.g. kitchen)."`
-	Attributes bool   `json:"attributes,omitempty" jsonschema:"Include full attributes and timestamps. Default returns only entity_id, state, name, unit and last_changed."`
+	Search      string `json:"search,omitempty" jsonschema:"Case-insensitive substring of entity_id, name or area name (e.g. garage, kitchen, temperature)."`
+	Domain      string `json:"domain,omitempty" jsonschema:"Domain(s), comma-separated (e.g. light or light,switch)."`
+	EntityID    string `json:"entity_id,omitempty" jsonschema:"Exact entity id(s), comma-separated."`
+	Area        string `json:"area,omitempty" jsonschema:"Area id or name (e.g. kitchen)."`
+	DeviceClass string `json:"device_class,omitempty" jsonschema:"device_class(es), comma-separated: door,window,garage_door,opening,motion,temperature,power,battery..."`
+	State       string `json:"state,omitempty" jsonschema:"Only entities currently in these state(s), comma-separated (e.g. on,open,unavailable)."`
+	All         bool   `json:"all,omitempty" jsonschema:"Include diagnostic/config entities (signal strength, firmware, restart buttons), hidden by default."`
+	Attributes  bool   `json:"attributes,omitempty" jsonschema:"Return full attributes (brightness, color, options, forecasts...) instead of the compact record."`
 }
 
 func (t *Tools) registerGetStates(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_home_states",
-		Description: "Get current states of Home Assistant entities. Filter by domain, entity_id or search; an unfiltered call returns every entity (hundreds), so narrow it. Set attributes=true only when you need brightness, color, options and other attributes.",
+		Name: "get_home_states",
+		Description: "Current state of Home Assistant entities, with area and last_changed (home's local time). " +
+			"Filters combine (AND). Without any filter it returns only entity counts per domain and area. " +
+			"Example: open doors = device_class=door,window,garage_door,opening state=on,open.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getStatesArgs) (*mcp.CallToolResult, any, error) {
 		states, err := t.client.GetStates(ctx)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
+		home := t.client.HomeContext(ctx)
 
-		states = filterStates(states, splitList(args.Domain), splitList(args.EntityID), args.Search)
-
-		if args.Attributes {
-			return mcputil.JSONResult(map[string]any{
-				"states": states,
-				"count":  len(states),
-			})
+		f := stateFilter{
+			domains:       splitList(args.Domain),
+			entityIDs:     splitList(args.EntityID),
+			deviceClasses: splitList(args.DeviceClass),
+			states:        splitList(args.State),
+			search:        strings.TrimSpace(args.Search),
+			all:           args.All,
 		}
-		return mcputil.JSONResult(map[string]any{
-			"states": slimStates(states),
-			"count":  len(states),
-		})
+		if args.Area != "" {
+			f.area = home.areaID(args.Area)
+		}
+		if f.empty() && !args.All {
+			out := stateIndex(home, states)
+			out["note"] = "No filter given: counts only. Call again with search, domain, area, device_class or state."
+			return mcputil.JSONResult(out)
+		}
+
+		kept, secondary := filterStates(home, states, f)
+		out := map[string]any{"count": len(kept)}
+		if args.Attributes {
+			out["states"] = kept
+		} else {
+			out["states"] = slimStates(home, kept)
+		}
+		if secondary > 0 {
+			out["omitted_diagnostic"] = secondary
+		}
+		if len(kept) == 0 {
+			out["note"] = noMatchNote(home, f, secondary)
+		}
+		return mcputil.JSONResult(out)
 	})
+}
+
+// noMatchNote tells the model why a state query came back empty, so it
+// retries with a better filter instead of concluding the thing does not exist.
+func noMatchNote(h *homeContext, f stateFilter, secondary int) string {
+	switch {
+	case secondary > 0:
+		return "Only diagnostic/config entities matched; set all=true to see them."
+	case f.area != "" && h.areaNames[f.area] == "" && h.registryErr == nil:
+		names := make([]string, 0, len(h.areaNames))
+		for _, n := range h.areaNames {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return "Unknown area. Areas: " + strings.Join(names, ", ")
+	default:
+		return "Nothing matched. Try a shorter search, or no domain/device_class filter."
+	}
 }
 
 // --- get_home_events ---
 
 type getEventsArgs struct {
-	Hours    int    `json:"hours" jsonschema:"Number of hours to look back (1-24)"`
-	EntityID string `json:"entity_id,omitempty" jsonschema:"Optional entity ID to filter events (e.g. light.living_room)"`
+	Hours    int    `json:"hours,omitempty" jsonschema:"Hours back from now (default 1, max 168). Ignored when start is set."`
+	Start    string `json:"start,omitempty" jsonschema:"Window start in the home's local time (2026-10-13 22:00) or RFC3339."`
+	End      string `json:"end,omitempty" jsonschema:"Window end, same formats (default now)."`
+	EntityID string `json:"entity_id,omitempty" jsonschema:"Entity id(s), comma-separated; listed in full."`
+	Domain   string `json:"domain,omitempty" jsonschema:"Domain(s), comma-separated (e.g. automation, cover,lock, person)."`
+	Area     string `json:"area,omitempty" jsonschema:"Area id or name."`
+	Search   string `json:"search,omitempty" jsonschema:"Case-insensitive substring of entity_id, name, message or area."`
+	All      bool   `json:"all,omitempty" jsonschema:"Include diagnostic/config entities (network trackers, firmware, buttons), dropped by default."`
 }
 
 func (t *Tools) registerGetEvents(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_home_events",
-		Description: "Get recent events from Home Assistant logbook. Shows state changes for smart home devices.",
+		Name: "get_home_events",
+		Description: "Logbook: what happened and when (state changes, automations triggered and why), oldest first, local time. " +
+			"Entities with many entries are folded into 'frequent' (count, first, last); pass their entity_id to list them. " +
+			"Check omitted_* counts before concluding nothing happened.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getEventsArgs) (*mcp.CallToolResult, any, error) {
-		hours := args.Hours
-		if hours <= 0 {
-			hours = 1
-		}
-		if hours > 24 {
-			hours = 24
-		}
-
-		since := time.Now().Add(-time.Duration(hours) * time.Hour)
-		entries, err := t.client.GetLogbook(ctx, since, args.EntityID)
+		home := t.client.HomeContext(ctx)
+		start, end, err := resolveWindow(home, t.clock(), args.Hours, 168, args.Start, args.End, 1)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-
-		return mcputil.JSONResult(map[string]any{
-			"events": entries,
-			"count":  len(entries),
-		})
+		ids := splitList(args.EntityID)
+		entries, err := t.client.GetLogbook(ctx, start, end, ids)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		f := logbookFilter{domains: splitList(args.Domain), entityIDs: ids, search: strings.TrimSpace(args.Search), all: args.All}
+		if args.Area != "" {
+			f.area = home.areaID(args.Area)
+		}
+		out := shapeLogbook(home, entries, f)
+		out["start"] = home.localTime(start)
+		out["end"] = home.localTime(end)
+		return mcputil.JSONResult(out)
 	})
 }
 
@@ -595,20 +661,27 @@ func (t *Tools) registerManageScenes(server *mcp.Server) {
 
 type getHomeRegistryArgs struct {
 	Kind   string `json:"kind,omitempty" jsonschema:"Registry to fetch: areas, devices, entities, labels, floors, or all (default)."`
-	AreaID string `json:"area_id,omitempty" jsonschema:"Only areas, devices and entities in this area (entities inherit their device's area)."`
+	AreaID string `json:"area_id,omitempty" jsonschema:"Only areas, devices and entities in this area (id or name; entities inherit their device's area)."`
 	Domain string `json:"domain,omitempty" jsonschema:"Only entities in these domain(s), comma-separated (e.g. light,switch)."`
+	All    bool   `json:"all,omitempty" jsonschema:"Include disabled devices/entities and diagnostic/config entities, left out by default."`
 	Full   bool   `json:"full,omitempty" jsonschema:"Return the raw registry records (ids, timestamps, options, config entries). Default returns a compact projection."`
 }
 
 func (t *Tools) registerGetHomeRegistry(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_home_registry",
-		Description: "Get Home Assistant topology (areas, devices, entities, labels, floors) to map entities to rooms, devices and floors. Compact by default; narrow with area_id or domain, since the full entity registry runs to thousands of rows.",
+		Name: "get_home_registry",
+		Description: "Home Assistant topology: areas, floors, labels, and which devices and entities are in each area. " +
+			"For current states by room use get_home_states area=... instead. Without area_id or domain, kind=all returns per-area counts rather than every device and entity.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getHomeRegistryArgs) (*mcp.CallToolResult, any, error) {
 		kind := strings.ToLower(strings.TrimSpace(args.Kind))
 		if kind == "" {
 			kind = "all"
+		}
+		switch kind {
+		case "all", "areas", "devices", "entities", "labels", "floors":
+		default:
+			return mcputil.Errorf("unknown kind %q (use areas, devices, entities, labels, floors, all)", args.Kind), nil, nil
 		}
 		domains := splitList(args.Domain)
 
@@ -620,30 +693,45 @@ func (t *Tools) registerGetHomeRegistry(server *mcp.Server) {
 
 		result := map[string]any{}
 		want := func(k string) bool { return kind == "all" || kind == k }
+		// An overview: the unfiltered compact kind=all, which would otherwise
+		// list every device and entity in the house.
+		overview := kind == "all" && !args.Full && args.AreaID == "" && len(domains) == 0
 
+		areas, err := wsClient.ListAreas()
+		if err != nil {
+			return mcputil.Errorf("areas: %v", err), nil, nil
+		}
+		areaID := resolveAreaArg(areas, args.AreaID)
 		if want("areas") {
-			items, err := wsClient.ListAreas()
-			if err != nil {
-				return mcputil.Errorf("areas: %v", err), nil, nil
-			}
+			items := areas
 			if !args.Full {
 				items = slimAreas(items)
 			}
-			result["areas"] = filterByArea(items, args.AreaID)
+			result["areas"] = filterByArea(items, areaID)
 		}
 		var devices []map[string]any
 		if want("devices") || (want("entities") && !args.Full) {
-			var err error
 			if devices, err = wsClient.ListDevices(); err != nil {
 				return mcputil.Errorf("devices: %v", err), nil, nil
 			}
 		}
+		omitted := 0
 		if want("devices") {
 			items := devices
 			if !args.Full {
 				items = slimDevices(items)
+				if !args.All {
+					var n int
+					items, n = dropRecords(items, "disabled_by")
+					omitted += n
+				}
 			}
-			result["devices"] = filterByArea(items, args.AreaID)
+			items = filterByArea(items, areaID)
+			if overview {
+				result["devices_per_area"] = countByArea(items)
+			} else {
+				result["devices"] = items
+			}
 		}
 		if want("entities") {
 			items, err := wsClient.ListEntityRegistry()
@@ -652,8 +740,18 @@ func (t *Tools) registerGetHomeRegistry(server *mcp.Server) {
 			}
 			if !args.Full {
 				items = slimEntities(items, devices)
+				if !args.All {
+					var n int
+					items, n = dropRecords(items, "disabled_by", "entity_category", "hidden_by")
+					omitted += n
+				}
 			}
-			result["entities"] = filterEntitiesByDomain(filterByArea(items, args.AreaID), domains)
+			items = filterEntitiesByDomain(filterByArea(items, areaID), domains)
+			if overview {
+				result["entities_per_area"] = countByArea(items)
+			} else {
+				result["entities"] = items
+			}
 		}
 		if want("labels") {
 			items, err := wsClient.ListLabels()
@@ -675,11 +773,14 @@ func (t *Tools) registerGetHomeRegistry(server *mcp.Server) {
 			}
 			result["floors"] = items
 		}
-		if len(result) == 0 {
-			return mcputil.TextResult(fmt.Sprintf("Unknown kind: %s (use areas, devices, entities, labels, floors, all)", args.Kind)), nil, nil
-		}
 		if kind != "all" {
 			result["count"] = len(result[kind].([]map[string]any))
+		}
+		if omitted > 0 {
+			result["omitted_disabled_or_diagnostic"] = omitted
+		}
+		if overview {
+			result["note"] = "Counts only; pass area_id, domain or kind=devices/entities for the records."
 		}
 		return mcputil.JSONResult(result)
 	})
@@ -732,60 +833,96 @@ func (t *Tools) registerListHomeServices(server *mcp.Server) {
 // --- get_state_history ---
 
 type getStateHistoryArgs struct {
-	EntityID        string `json:"entity_id" jsonschema:"Entity ID(s) to fetch history for. Comma-separate to query multiple at once (e.g. sensor.temp,sensor.humidity)."`
-	Hours           int    `json:"hours,omitempty" jsonschema:"Hours to look back (1-168, default 24)."`
-	MinimalResponse *bool  `json:"minimal_response,omitempty" jsonschema:"If true (default), HA omits attributes from intermediate points to keep responses small."`
-	SignificantOnly *bool  `json:"significant_changes_only,omitempty" jsonschema:"If true, HA returns only significant state changes (not every poll)."`
+	EntityID string `json:"entity_id" jsonschema:"Entity id(s), comma-separated (e.g. sensor.living_room_temperature,light.porch)."`
+	Hours    int    `json:"hours,omitempty" jsonschema:"Hours back from now (default 24, max 240). Ignored when start is set."`
+	Start    string `json:"start,omitempty" jsonschema:"Window start in the home's local time (2026-10-13 22:00) or RFC3339. Use for 'last night' or 'yesterday'."`
+	End      string `json:"end,omitempty" jsonschema:"Window end, same formats as start (default now)."`
+	Raw      bool   `json:"raw,omitempty" jsonschema:"Return every recorded sample instead of the summary. Large; only when the summary is not enough."`
+}
+
+// maxHistoryHours is the recorder's default retention (10 days).
+const maxHistoryHours = 240
+
+// resolveWindow turns hours/start/end arguments into a time window ending no
+// later than now.
+func resolveWindow(h *homeContext, now time.Time, hours, maxHours int, startArg, endArg string, defHours int) (time.Time, time.Time, error) {
+	end := now
+	if endArg != "" {
+		t, ok := h.parseUserTime(endArg)
+		if !ok {
+			return time.Time{}, time.Time{}, fmt.Errorf("cannot parse end %q (use 2026-10-13 22:00 or RFC3339)", endArg)
+		}
+		end = t
+	}
+	if hours <= 0 {
+		hours = defHours
+	}
+	if hours > maxHours {
+		hours = maxHours
+	}
+	start := end.Add(-time.Duration(hours) * time.Hour)
+	if startArg != "" {
+		t, ok := h.parseUserTime(startArg)
+		if !ok {
+			return time.Time{}, time.Time{}, fmt.Errorf("cannot parse start %q (use 2026-10-13 22:00 or RFC3339)", startArg)
+		}
+		start = t
+	}
+	if !start.Before(end) {
+		return time.Time{}, time.Time{}, fmt.Errorf("start must be before end")
+	}
+	if end.Sub(start) > time.Duration(maxHours)*time.Hour {
+		start = end.Add(-time.Duration(maxHours) * time.Hour)
+	}
+	return start, end, nil
 }
 
 func (t *Tools) registerGetStateHistory(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_state_history",
-		Description: "Get the time-series state history for one or more entities. Use this for numeric trends (e.g. temperature over the night, door open/closed timeline). For human-readable event descriptions use get_home_events instead.",
+		Name: "get_state_history",
+		Description: "How entities changed over a time window. Numeric sensors come back as time-weighted min/mean/max " +
+			"(per bucket when long); on/off and other states as transitions plus time_in_state. Times are the home's local time. " +
+			"For energy totals or windows beyond 10 days use get_long_term_statistics.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getStateHistoryArgs) (*mcp.CallToolResult, any, error) {
-		if args.EntityID == "" {
-			return mcputil.TextResult("Error: entity_id is required"), nil, nil
+		entityIDs := splitList(args.EntityID)
+		if len(entityIDs) == 0 {
+			return mcputil.Errorf("entity_id is required (find ids with get_home_states search=...)"), nil, nil
 		}
-		hours := args.Hours
-		if hours <= 0 {
-			hours = 24
-		}
-		if hours > 168 {
-			hours = 168
-		}
-
-		minimal := true
-		if args.MinimalResponse != nil {
-			minimal = *args.MinimalResponse
-		}
-		significant := false
-		if args.SignificantOnly != nil {
-			significant = *args.SignificantOnly
-		}
-
-		entityIDs := make([]string, 0)
-		for _, id := range strings.Split(args.EntityID, ",") {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				entityIDs = append(entityIDs, id)
-			}
-		}
-
-		end := time.Now()
-		start := end.Add(-time.Duration(hours) * time.Hour)
-		history, err := t.client.GetHistory(ctx, start, end, entityIDs, minimal, significant)
+		home := t.client.HomeContext(ctx)
+		start, end, err := resolveWindow(home, t.clock(), args.Hours, maxHistoryHours, args.Start, args.End, 24)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
 
-		return mcputil.JSONResult(map[string]any{
-			"history":      history,
-			"entity_ids":   entityIDs,
-			"start":        start.UTC().Format(time.RFC3339),
-			"end":          end.UTC().Format(time.RFC3339),
-			"series_count": len(history),
-		})
+		history, err := t.client.GetHistory(ctx, start, end, entityIDs, true, false)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+
+		out := map[string]any{"start": home.localTime(start), "end": home.localTime(end)}
+		if args.Raw {
+			out["history"] = history
+			return mcputil.JSONResult(out)
+		}
+		series := make([]map[string]any, 0, len(history))
+		found := map[string]bool{}
+		for _, s := range history {
+			sum := summarizeSeries(home, s, start, end)
+			found[str(sum, "entity_id")] = true
+			series = append(series, sum)
+		}
+		out["series"] = series
+		var missing []string
+		for _, id := range entityIDs {
+			if !found[id] {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			out["no_history"] = missing
+		}
+		return mcputil.JSONResult(out)
 	})
 }
 
@@ -816,45 +953,54 @@ func (t *Tools) registerRenderTemplate(server *mcp.Server) {
 // --- get_long_term_statistics ---
 
 type getLongTermStatisticsArgs struct {
-	StatisticIDs string `json:"statistic_ids" jsonschema:"Statistic IDs to query, comma-separated (typically entity IDs of measurement sensors, e.g. sensor.energy_daily)."`
-	Hours        int    `json:"hours,omitempty" jsonschema:"Hours to look back (1-8760 i.e. up to a year, default 168 = 1 week)."`
-	Period       string `json:"period,omitempty" jsonschema:"Aggregation bucket: 5minute, hour (default), day, week, or month."`
+	Search       string `json:"search,omitempty" jsonschema:"Find statistics by substring of entity id, name or area (e.g. energy, power, temperature) and rank them by window total. Use instead of statistic_ids when you do not know the ids."`
+	StatisticIDs string `json:"statistic_ids,omitempty" jsonschema:"Statistic ids (usually sensor entity ids), comma-separated; returns per-period rows."`
+	Hours        int    `json:"hours,omitempty" jsonschema:"Hours back from now (default 168, max 8760). Ignored when start is set."`
+	Start        string `json:"start,omitempty" jsonschema:"Window start in the home's local time (2026-10-01 or 2026-10-01 00:00) or RFC3339."`
+	End          string `json:"end,omitempty" jsonschema:"Window end, same formats (default now)."`
+	Period       string `json:"period,omitempty" jsonschema:"Row bucket: 5minute, hour, day, week, month. Default fits the window (hour up to 2 days, day up to 2 months)."`
+	Raw          bool   `json:"raw,omitempty" jsonschema:"Return the recorder's raw rows (epoch-ms times, sum, state, last_reset)."`
 }
 
 func (t *Tools) registerGetLongTermStatistics(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_long_term_statistics",
-		Description: "Query Home Assistant's long-term statistics (energy, gas, water, measurement-class sensors) aggregated by 5minute/hour/day/week/month. Required for energy-usage and trend questions beyond the 10-day short-term history window.",
+		Name: "get_long_term_statistics",
+		Description: "Long-term statistics (kept indefinitely) for sensors with a state_class: energy, water, gas, power, temperature. " +
+			"Each statistic gets its window total_change (counters such as kWh) or mean/min/max (measurements). " +
+			"For 'what used the most energy this week' pass search=energy: results are ranked by total_change. Times are local.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getLongTermStatisticsArgs) (*mcp.CallToolResult, any, error) {
-		if args.StatisticIDs == "" {
-			return mcputil.TextResult("Error: statistic_ids is required"), nil, nil
+		ids := splitList(args.StatisticIDs)
+		search := strings.TrimSpace(args.Search)
+		if len(ids) == 0 && search == "" {
+			return mcputil.Errorf("pass search (e.g. energy) or statistic_ids"), nil, nil
 		}
-		ids := make([]string, 0)
-		for _, id := range strings.Split(args.StatisticIDs, ",") {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				ids = append(ids, id)
+		home := t.client.HomeContext(ctx)
+		start, end, err := resolveWindow(home, t.clock(), args.Hours, 8760, args.Start, args.End, 168)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		period := strings.ToLower(strings.TrimSpace(args.Period))
+		if period == "" {
+			period = defaultPeriod(end.Sub(start))
+		}
+		if !slices.Contains(statisticPeriods, period) {
+			return mcputil.Errorf("unknown period %q (use %s)", args.Period, strings.Join(statisticPeriods, ", ")), nil, nil
+		}
+
+		states, err := t.client.GetStates(ctx)
+		if err != nil {
+			return mcputil.Errorf("%v", err), nil, nil
+		}
+		if search != "" && len(ids) == 0 {
+			ids = statisticCandidates(home, states, search)
+			if len(ids) == 0 {
+				return mcputil.Errorf("no sensor with long-term statistics matches %q; try a broader word (energy, power, temperature)", search), nil, nil
+			}
+			if len(ids) > maxStatisticsSearch {
+				return mcputil.Errorf("%d statistics match %q; narrow the search (e.g. energy_today, or an area name)", len(ids), search), nil, nil
 			}
 		}
-		if len(ids) == 0 {
-			return mcputil.TextResult("Error: at least one statistic_id is required"), nil, nil
-		}
-
-		hours := args.Hours
-		if hours <= 0 {
-			hours = 168
-		}
-		if hours > 8760 {
-			hours = 8760
-		}
-		period := args.Period
-		if period == "" {
-			period = "hour"
-		}
-
-		end := time.Now()
-		start := end.Add(-time.Duration(hours) * time.Hour)
 
 		wsClient := t.client.NewWebsocketClient()
 		if err := wsClient.Dial(ctx); err != nil {
@@ -862,40 +1008,70 @@ func (t *Tools) registerGetLongTermStatistics(server *mcp.Server) {
 		}
 		defer func() { _ = wsClient.Close() }()
 
-		stats, err := wsClient.StatisticsDuringPeriod(start, end, ids, period)
+		var types []string
+		if !args.Raw {
+			types = []string{"change", "mean", "min", "max"}
+		}
+		stats, err := wsClient.StatisticsDuringPeriod(start, end, ids, period, types...)
 		if err != nil {
 			return mcputil.Errorf("%v", err), nil, nil
 		}
-		return mcputil.JSONResult(map[string]any{
-			"statistics": stats,
-			"start":      start.UTC().Format(time.RFC3339),
-			"end":        end.UTC().Format(time.RFC3339),
-			"period":     period,
-		})
+		out := map[string]any{"start": home.localTime(start), "end": home.localTime(end), "period": period}
+		if args.Raw {
+			out["statistics"] = stats
+			return mcputil.JSONResult(out)
+		}
+		// A search ranks totals; the per-period rows are for named ids.
+		named := len(splitList(args.StatisticIDs)) > 0
+		shaped := shapeStatistics(home, stats, states, named)
+		if !named {
+			// Idle counters (a disconnected circuit) only pad a ranking.
+			kept := shaped[:0]
+			idle := 0
+			for _, s := range shaped {
+				if v, ok := s["total_change"].(float64); ok && v == 0 {
+					idle++
+					continue
+				}
+				kept = append(kept, s)
+			}
+			shaped = kept
+			if idle > 0 {
+				out["unchanged"] = idle
+			}
+		}
+		out["statistics"] = shaped
+		var missing []string
+		for _, id := range ids {
+			if _, ok := stats[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			out["no_statistics"] = missing
+		}
+		return mcputil.JSONResult(out)
 	})
 }
 
 // --- get_calendar_events ---
 
 type getCalendarEventsArgs struct {
-	EntityID string `json:"entity_id,omitempty" jsonschema:"Calendar entity ID (e.g. calendar.work). Omit to list all calendar entities instead of fetching events."`
-	Hours    int    `json:"hours,omitempty" jsonschema:"Window size in hours, looking forward from now (1-720, default 168 = 1 week)."`
+	EntityID string `json:"entity_id,omitempty" jsonschema:"Calendar entity id(s), comma-separated (e.g. calendar.family). Omit for every calendar."`
+	Hours    int    `json:"hours,omitempty" jsonschema:"Hours ahead of start to cover (default 168, max 720)."`
+	Start    string `json:"start,omitempty" jsonschema:"Window start in the home's local time (2026-10-13 or 2026-10-13 08:00) or RFC3339; default now."`
 }
+
+// maxCalendarEvents caps the merged event list.
+const maxCalendarEvents = 100
 
 func (t *Tools) registerGetCalendarEvents(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_calendar_events",
-		Description: "Get upcoming events from a Home Assistant calendar entity. Omit entity_id to list available calendars first; supply it to fetch events in a forward-looking window.",
+		Description: "Upcoming events from Home Assistant calendars, merged and sorted by start (local time). Omit entity_id to read every calendar.",
 		Annotations: mcputil.ReadOnly(),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getCalendarEventsArgs) (*mcp.CallToolResult, any, error) {
-		if args.EntityID == "" {
-			calendars, err := t.client.GetCalendars(ctx)
-			if err != nil {
-				return mcputil.Errorf("%v", err), nil, nil
-			}
-			return mcputil.JSONResult(map[string]any{"calendars": calendars, "count": len(calendars)})
-		}
-
+		home := t.client.HomeContext(ctx)
 		hours := args.Hours
 		if hours <= 0 {
 			hours = 168
@@ -903,18 +1079,122 @@ func (t *Tools) registerGetCalendarEvents(server *mcp.Server) {
 		if hours > 720 {
 			hours = 720
 		}
-
-		start := time.Now()
-		end := start.Add(time.Duration(hours) * time.Hour)
-		events, err := t.client.GetCalendarEvents(ctx, args.EntityID, start, end)
-		if err != nil {
-			return mcputil.Errorf("%v", err), nil, nil
+		start := t.clock()
+		if args.Start != "" {
+			s, ok := home.parseUserTime(args.Start)
+			if !ok {
+				return mcputil.Errorf("cannot parse start %q (use 2026-10-13 08:00 or RFC3339)", args.Start), nil, nil
+			}
+			start = s
 		}
-		return mcputil.JSONResult(map[string]any{
-			"events": events,
-			"count":  len(events),
-			"start":  start.UTC().Format(time.RFC3339),
-			"end":    end.UTC().Format(time.RFC3339),
-		})
+		end := start.Add(time.Duration(hours) * time.Hour)
+
+		ids := splitList(args.EntityID)
+		names := map[string]string{}
+		if len(ids) == 0 {
+			calendars, err := t.client.GetCalendars(ctx)
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+				// /api/calendars exists only once the calendar integration is
+				// loaded, i.e. when some integration provides a calendar.
+				return mcputil.JSONResult(map[string]any{"events": []any{}, "count": 0,
+					"note": "No calendar integration is set up in Home Assistant, so there are no calendars to read."})
+			}
+			if err != nil {
+				return mcputil.Errorf("%v", err), nil, nil
+			}
+			for _, c := range calendars {
+				ids = append(ids, c.EntityID)
+				names[c.EntityID] = c.Name
+			}
+			if len(ids) == 0 {
+				return mcputil.JSONResult(map[string]any{"events": []any{}, "count": 0, "note": "Home Assistant has no calendar entities."})
+			}
+		}
+
+		type row struct {
+			at  time.Time
+			rec map[string]any
+		}
+		var rows []row
+		var errs []string
+		for _, id := range ids {
+			events, err := t.client.GetCalendarEvents(ctx, id, start, end)
+			if err != nil {
+				errs = append(errs, err.Error())
+				continue
+			}
+			for _, e := range events {
+				r := calendarRow(home, e)
+				if len(ids) > 1 {
+					r["calendar"] = id
+				}
+				rows = append(rows, row{at: calendarTime(home, e.Start), rec: r})
+			}
+		}
+		if len(rows) == 0 && len(errs) > 0 {
+			return mcputil.Errorf("%s", strings.Join(errs, "; ")), nil, nil
+		}
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].at.Before(rows[j].at) })
+		out := map[string]any{"start": home.localTime(start), "end": home.localTime(end), "count": len(rows)}
+		if len(rows) > maxCalendarEvents {
+			out["omitted_later"] = len(rows) - maxCalendarEvents
+			rows = rows[:maxCalendarEvents]
+		}
+		list := make([]map[string]any, 0, len(rows))
+		for _, r := range rows {
+			list = append(list, r.rec)
+		}
+		out["events"] = list
+		if len(names) > 1 {
+			out["calendars"] = names
+		}
+		if len(errs) > 0 {
+			out["errors"] = errs
+		}
+		return mcputil.JSONResult(out)
 	})
+}
+
+// calendarTime reads an event boundary: {"dateTime": RFC3339} for timed
+// events, {"date": "2006-01-02"} for all-day ones (local midnight).
+func calendarTime(h *homeContext, m map[string]any) time.Time {
+	if s, _ := m["dateTime"].(string); s != "" {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			return t
+		}
+	}
+	if s, _ := m["date"].(string); s != "" {
+		if t, err := time.ParseInLocation("2006-01-02", s, h.loc); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// calendarRow flattens an event to local start/end strings; an all-day event
+// keeps its dates and says so.
+func calendarRow(h *homeContext, e CalendarEvent) map[string]any {
+	r := map[string]any{"summary": e.Summary}
+	if d, _ := e.Start["date"].(string); d != "" {
+		r["all_day"] = true
+		r["start"] = d
+		if ed, _ := e.End["date"].(string); ed != "" {
+			r["end"] = ed
+		}
+	} else {
+		r["start"] = h.localTime(calendarTime(h, e.Start))
+		r["end"] = h.localTime(calendarTime(h, e.End))
+	}
+	if e.Location != "" {
+		r["location"] = e.Location
+	}
+	if e.Description != "" {
+		d := e.Description
+		if len(d) > 300 {
+			d = d[:300] + "..."
+		}
+		r["description"] = d
+	}
+	return r
 }
