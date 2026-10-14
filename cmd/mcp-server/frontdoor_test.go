@@ -364,6 +364,11 @@ func TestCloudflareDoorAttributesUser(t *testing.T) {
 	door, _, logs := cfDoor(t)
 	serve(door, toolCall(bearer(goodToken)))
 	line := auditLine(t, logs)
+	// The audit log claims to record the negotiated protocol; on the
+	// stateless 2026-07-28 path that comes from params._meta, not a handshake.
+	if line["protocol"] != "2026-07-28" {
+		t.Errorf("protocol = %v, want 2026-07-28", line["protocol"])
+	}
 	if line["user"] != "chris@example.com" || line["front_door"] != "cloudflare" || line["outcome"] != "ok" {
 		t.Errorf("audit line = %v", line)
 	}
