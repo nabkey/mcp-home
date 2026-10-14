@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/cloudflare/cloudflare-go/v4"
 )
@@ -42,6 +44,26 @@ func Explain(err error, what, perm string) error {
 		return fmt.Errorf("%s: cannot reach the Cloudflare API (network), will retry: %w", what, err)
 	}
 	return fmt.Errorf("%s: %w", what, err)
+}
+
+// Retry calls fn up to attempts times, waiting backoff (doubling) between
+// tries, for as long as it fails with a Transient error. A permanent error,
+// or ctx ending, returns at once.
+func Retry(ctx context.Context, attempts int, backoff time.Duration, logger *slog.Logger, what string, fn func() error) error {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err = fn(); err == nil || !Transient(err) || attempt == attempts {
+			return err
+		}
+		logger.Warn(what+" failed, retrying", "attempt", attempt, "of", attempts, "in", backoff, "error", err)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s interrupted: %w", what, err)
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return err
 }
 
 // Transient reports whether err is worth retrying: rate limiting, a server
