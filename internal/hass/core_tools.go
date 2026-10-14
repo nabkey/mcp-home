@@ -2,6 +2,7 @@ package hass
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -103,6 +104,14 @@ func (t *Tools) registerGetHomeConfig(server *mcp.Server) {
 			if err != nil {
 				errs = append(errs, err.Error())
 			} else {
+				// /api/config embeds every loaded component (~10 KB on a
+				// typical install); that is what kind=components is for.
+				if comps, ok := config["components"].([]any); ok && kind == "core" {
+					config["components"] = fmt.Sprintf("%d loaded; kind=components lists them", len(comps))
+				} else if kind == "all" {
+					delete(config, "components")
+				}
+				delete(config, "whitelist_external_dirs") // deprecated alias of allowlist_external_dirs
 				out["core"] = config
 			}
 		}

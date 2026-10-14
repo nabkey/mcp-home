@@ -3,7 +3,6 @@ package hass
 import (
 	"sort"
 	"strings"
-	"time"
 )
 
 // Slim projections of Home Assistant payloads for tool results.
@@ -14,65 +13,6 @@ import (
 // few hundred kilobytes. Tool results go straight into a model's context,
 // so by default the tools return only the fields an agent acts on and offer
 // a flag for the full record.
-
-// SlimState is the default per-entity record from get_home_states.
-type SlimState struct {
-	EntityID    string    `json:"entity_id"`
-	State       string    `json:"state"`
-	Name        string    `json:"name,omitempty"`
-	Unit        string    `json:"unit,omitempty"`
-	LastChanged time.Time `json:"last_changed"`
-}
-
-// slimStates projects states to their essentials.
-func slimStates(states []State) []SlimState {
-	out := make([]SlimState, 0, len(states))
-	for _, s := range states {
-		name, _ := s.Attributes["friendly_name"].(string)
-		unit, _ := s.Attributes["unit_of_measurement"].(string)
-		out = append(out, SlimState{EntityID: s.EntityID, State: s.State, Name: name, Unit: unit, LastChanged: s.LastChanged})
-	}
-	return out
-}
-
-// splitList parses a comma-separated argument into trimmed, non-empty items.
-func splitList(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// filterStates applies the get_home_states filters: domains (entity_id
-// prefix), exact entity ids, and a case-insensitive substring match on
-// entity_id or friendly_name. Empty filters match everything.
-func filterStates(states []State, domains, entityIDs []string, search string) []State {
-	ids := make(map[string]bool, len(entityIDs))
-	for _, id := range entityIDs {
-		ids[id] = true
-	}
-	search = strings.ToLower(search)
-	out := make([]State, 0, len(states))
-	for _, s := range states {
-		if len(domains) > 0 && !hasDomain(s.EntityID, domains) {
-			continue
-		}
-		if len(ids) > 0 && !ids[s.EntityID] {
-			continue
-		}
-		if search != "" {
-			name, _ := s.Attributes["friendly_name"].(string)
-			if !strings.Contains(strings.ToLower(s.EntityID), search) && !strings.Contains(strings.ToLower(name), search) {
-				continue
-			}
-		}
-		out = append(out, s)
-	}
-	return out
-}
 
 func hasDomain(entityID string, domains []string) bool {
 	for _, d := range domains {
@@ -182,6 +122,60 @@ func slimEntities(entities, devices []map[string]any) []map[string]any {
 		out = append(out, rec)
 	}
 	return out
+}
+
+// dropRecords removes records where any of keys is set (non-empty), returning
+// the rest and how many were removed. Used to leave disabled, hidden and
+// diagnostic/config registry entries out of the compact projection.
+func dropRecords(recs []map[string]any, keys ...string) ([]map[string]any, int) {
+	out := make([]map[string]any, 0, len(recs))
+	for _, r := range recs {
+		set := false
+		for _, k := range keys {
+			if str(r, k) != "" {
+				set = true
+				break
+			}
+		}
+		if !set {
+			out = append(out, r)
+		}
+	}
+	return out, len(recs) - len(out)
+}
+
+// countByArea counts records per area_id; records without one count under
+// "none".
+func countByArea(recs []map[string]any) map[string]int {
+	out := map[string]int{}
+	for _, r := range recs {
+		a := str(r, "area_id")
+		if a == "" {
+			a = "none"
+		}
+		out[a]++
+	}
+	return out
+}
+
+// resolveAreaArg maps an area argument given as an id or display name to its
+// area_id; unknown values pass through unchanged.
+func resolveAreaArg(areas []map[string]any, arg string) string {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return ""
+	}
+	for _, a := range areas {
+		if str(a, "area_id") == arg {
+			return arg
+		}
+	}
+	for _, a := range areas {
+		if strings.EqualFold(str(a, "name"), arg) || strings.EqualFold(str(a, "area_id"), arg) {
+			return str(a, "area_id")
+		}
+	}
+	return arg
 }
 
 // filterByArea keeps records whose area_id equals areaID. Empty areaID

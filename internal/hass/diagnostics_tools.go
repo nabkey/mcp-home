@@ -2,8 +2,12 @@ package hass
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,6 +30,81 @@ func tailString(s string, max int) (string, bool) {
 		tail = tail[1:]
 	}
 	return tail, true
+}
+
+// maxSystemLogEntries caps the system log entries returned, newest first.
+const maxSystemLogEntries = 30
+
+// systemLog fetches system_log/list and shapes it: newest first, local
+// times, messages joined, tracebacks cut to their last line.
+func (t *Tools) systemLog(ctx context.Context) ([]map[string]any, error) {
+	ws := t.client.NewWebsocketClient()
+	if err := ws.Dial(ctx); err != nil {
+		return nil, err
+	}
+	defer func() { _ = ws.Close() }()
+	entries, err := ws.SystemLog()
+	if err != nil {
+		return nil, err
+	}
+	home := t.client.HomeContext(ctx)
+	sort.SliceStable(entries, func(i, j int) bool {
+		ti, _ := entries[i]["timestamp"].(float64)
+		tj, _ := entries[j]["timestamp"].(float64)
+		return ti > tj
+	})
+	if len(entries) > maxSystemLogEntries {
+		entries = entries[:maxSystemLogEntries]
+	}
+	out := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		rec := pick(e, "level", "name", "count")
+		if ts, ok := e["timestamp"].(float64); ok {
+			rec["last"] = home.localTime(time.Unix(int64(ts), 0))
+		}
+		var msgs []string
+		if list, ok := e["message"].([]any); ok {
+			for _, m := range list {
+				msgs = append(msgs, fmt.Sprint(m))
+			}
+		}
+		msg := strings.Join(msgs, " | ")
+		if len(msg) > 500 {
+			msg = msg[:500] + "..."
+		}
+		rec["message"] = msg
+		if src, ok := e["source"].([]any); ok && len(src) == 2 {
+			rec["source"] = fmt.Sprintf("%v:%v", src[0], src[1])
+		}
+		if exc := strings.TrimSpace(str(e, "exception")); exc != "" {
+			lines := strings.Split(exc, "\n")
+			rec["exception"] = strings.TrimSpace(lines[len(lines)-1])
+		}
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
+// slimRepairs keeps the fields of each open repair issue that say what is
+// wrong, dropping ignored issues and nulls.
+func slimRepairs(v any) any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	issues, ok := m["issues"].([]any)
+	if !ok {
+		return v
+	}
+	out := make([]map[string]any, 0, len(issues))
+	for _, it := range issues {
+		is, ok := it.(map[string]any)
+		if !ok || is["ignored"] == true {
+			continue
+		}
+		out = append(out, pick(is, "domain", "issue_domain", "issue_id", "severity", "translation_key", "translation_placeholders", "is_fixable", "learn_more_url", "created", "breaks_in_ha_version"))
+	}
+	return out
 }
 
 // --- get_diagnostics ---
@@ -53,15 +132,29 @@ func (t *Tools) registerGetDiagnostics(server *mcp.Server) {
 
 		out := map[string]any{}
 
-		// error_log is REST; the rest are WebSocket.
+		// error_log is REST, falling back to the WebSocket system log; the
+		// rest are WebSocket.
 		if kind == "error_log" || kind == "all" {
 			log, err := t.client.GetErrorLog(ctx)
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+				// No log file (Home Assistant OS default since 2024.11):
+				// the in-memory system log has the same errors, deduplicated.
+				entries, serr := t.systemLog(ctx)
+				if serr == nil {
+					out["error_log"] = entries
+					err = nil
+					log = ""
+				} else {
+					err = fmt.Errorf("no log file, and system_log/list failed: %w", serr)
+				}
+			}
 			if err != nil {
 				if kind == "error_log" {
 					return mcputil.Errorf("%v", err), nil, nil
 				}
 				out["error_log_error"] = err.Error()
-			} else {
+			} else if log != "" {
 				tail, truncated := tailString(log, maxErrorLogChars)
 				out["error_log"] = tail
 				if truncated {
@@ -96,7 +189,11 @@ func (t *Tools) registerGetDiagnostics(server *mcp.Server) {
 					}
 					return mcputil.Errorf("%v", err)
 				}
-				out[name] = v
+				// system_health/info answers null on current Home Assistant
+				// (it became a subscription); say nothing rather than null.
+				if v != nil {
+					out[name] = v
+				}
 				return nil
 			}
 
@@ -106,7 +203,10 @@ func (t *Tools) registerGetDiagnostics(server *mcp.Server) {
 				}
 			}
 			if kind == "repairs" || kind == "all" {
-				if res := section("repairs", wsClient.RepairsListIssues); res != nil {
+				if res := section("repairs", func() (any, error) {
+					v, err := wsClient.RepairsListIssues()
+					return slimRepairs(v), err
+				}); res != nil {
 					return res, nil, nil
 				}
 			}

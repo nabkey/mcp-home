@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +33,7 @@ type Client struct {
 	token      string
 	httpClient *http.Client
 	policy     *ServicePolicy
+	homeCtx    homeContextCache
 }
 
 // NewClient creates a new Home Assistant client.
@@ -108,20 +110,99 @@ func (c *Client) doRequest(ctx context.Context, method, path string, query url.V
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		if ctx.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || isTimeout(err)) {
+			return nil, fmt.Errorf("no answer to %s %s within %s; Home Assistant may be restarting or overloaded, retry shortly", method, path, c.httpClient.Timeout)
+		}
+		return nil, fmt.Errorf("cannot reach Home Assistant for %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJSONResponseSize))
+	// Read one byte past the limit so an oversized body is reported as such
+	// rather than surfacing later as truncated JSON.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJSONResponseSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("reading response to %s %s: %w", method, path, err)
+	}
+	if len(body) > maxJSONResponseSize {
+		return nil, fmt.Errorf("response to %s %s exceeds %d MB; narrow the request (fewer entities or a shorter window)", method, path, maxJSONResponseSize>>20)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, &APIError{Method: method, Path: path, Status: resp.StatusCode, Body: summarizeBody(resp.Header.Get("Content-Type"), body)}
+	}
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
+		return nil, fmt.Errorf("%s %s returned an HTML page instead of API data; HASS_URL likely points at a login or proxy page, not Home Assistant", method, path)
 	}
 
 	return body, nil
+}
+
+func isTimeout(err error) bool {
+	var t interface{ Timeout() bool }
+	return errors.As(err, &t) && t.Timeout()
+}
+
+// APIError is a non-2xx answer from the REST API. Its message says what the
+// status means for the caller, since the model reading it cannot look at the
+// Home Assistant side.
+type APIError struct {
+	Method, Path string
+	Status       int
+	Body         string
+}
+
+// maxErrorBody bounds how much of an error body is quoted.
+const maxErrorBody = 300
+
+func (e *APIError) Error() string {
+	var hint string
+	switch {
+	case e.Status == http.StatusUnauthorized:
+		hint = "the access token was rejected; the server's HASS_TOKEN must be replaced"
+	case e.Status == http.StatusForbidden:
+		hint = "the token's user is not allowed to do this (admin rights are needed for config endpoints)"
+	case e.Status == http.StatusNotFound:
+		hint = "not found: the id does not exist, or the integration that serves this endpoint is not loaded"
+	case e.Status == http.StatusBadRequest:
+		hint = "Home Assistant rejected the request"
+	case e.Status == http.StatusMethodNotAllowed:
+		hint = "this endpoint does not accept " + e.Method
+	case e.Status == http.StatusBadGateway || e.Status == http.StatusServiceUnavailable || e.Status == http.StatusGatewayTimeout:
+		hint = "Home Assistant is unreachable behind its proxy or still starting; retry shortly"
+	case e.Status >= 500:
+		hint = "Home Assistant failed internally (see get_diagnostics kind=error_log)"
+	default:
+		hint = "unexpected status"
+	}
+	msg := fmt.Sprintf("%s %s: HTTP %d: %s", e.Method, e.Path, e.Status, hint)
+	if e.Body != "" {
+		msg += " (" + e.Body + ")"
+	}
+	return msg
+}
+
+// summarizeBody keeps an error body short and drops HTML, which only ever
+// comes from a proxy and says nothing useful.
+func summarizeBody(contentType string, body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if strings.Contains(contentType, "text/html") || strings.HasPrefix(s, "<") {
+		return ""
+	}
+	// HA's own errors are {"message": "..."}.
+	var m struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &m) == nil && m.Message != "" {
+		s = m.Message
+	}
+	if len(s) > maxErrorBody {
+		s = s[:maxErrorBody] + "..."
+	}
+	// "404: Not Found" restates the status.
+	if strings.HasSuffix(s, http.StatusText(http.StatusNotFound)) && len(s) < 20 {
+		return ""
+	}
+	return s
 }
 
 // GetStates retrieves all entity states from Home Assistant.
@@ -139,13 +220,18 @@ func (c *Client) GetStates(ctx context.Context) ([]State, error) {
 	return states, nil
 }
 
-// GetLogbook retrieves logbook entries from Home Assistant.
-func (c *Client) GetLogbook(ctx context.Context, since time.Time, entityID string) ([]LogbookEntry, error) {
-	path := fmt.Sprintf("/api/logbook/%s", since.Format(time.RFC3339))
+// GetLogbook retrieves logbook entries in [since, end] (end zero: Home
+// Assistant's default of one day after since), optionally limited to
+// entityIDs.
+func (c *Client) GetLogbook(ctx context.Context, since, end time.Time, entityIDs []string) ([]LogbookEntry, error) {
+	path := fmt.Sprintf("/api/logbook/%s", since.UTC().Format(time.RFC3339))
 
 	query := url.Values{}
-	if entityID != "" {
-		query.Set("entity", entityID)
+	if len(entityIDs) > 0 {
+		query.Set("entity", strings.Join(entityIDs, ","))
+	}
+	if !end.IsZero() {
+		query.Set("end_time", end.UTC().Format(time.RFC3339))
 	}
 
 	body, err := c.doRequest(ctx, "GET", path, query, nil)
@@ -489,7 +575,8 @@ func (c *WebsocketClient) Dial(ctx context.Context) error {
 		scheme = "wss"
 	}
 	u.Scheme = scheme
-	u.Path = "/api/websocket"
+	// Keep any path prefix in the base URL, as doRequest does for REST.
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/websocket"
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
@@ -574,11 +661,34 @@ func (c *WebsocketClient) readResponse(id int) (map[string]any, error) {
 		respID, ok := resp["id"].(float64)
 		if ok && int(respID) == id {
 			if success, ok := resp["success"].(bool); ok && !success {
-				return nil, fmt.Errorf("request error: %v", resp["error"])
+				return nil, wsError(resp["error"])
 			}
 			return resp, nil
 		}
 	}
+}
+
+// wsError renders a WebSocket {"code","message"} error as "message (code)",
+// naming the cases a caller can act on.
+func wsError(v any) error {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Errorf("request error: %v", v)
+	}
+	code, _ := m["code"].(string)
+	msg, _ := m["message"].(string)
+	switch code {
+	case "unknown_command":
+		return fmt.Errorf("this Home Assistant does not support the command (%s): %s", code, msg)
+	case "unauthorized":
+		return fmt.Errorf("the token's user is not allowed to do this (%s): %s", code, msg)
+	case "not_found":
+		return fmt.Errorf("not found (%s): %s", code, msg)
+	}
+	if code == "" {
+		return fmt.Errorf("request error: %s", msg)
+	}
+	return fmt.Errorf("request error (%s): %s", code, msg)
 }
 
 // getEntityConfig retrieves the raw configuration for an automation, script,
@@ -800,7 +910,9 @@ func (c *WebsocketClient) GetSceneConfig(entityID string) (map[string]any, error
 // StatisticsDuringPeriod returns long-term statistics for the given statistic_ids in [start, end].
 // period must be one of "5minute", "hour", "day", "week", "month".
 // Result is keyed by statistic_id.
-func (c *WebsocketClient) StatisticsDuringPeriod(start, end time.Time, statisticIDs []string, period string) (map[string]any, error) {
+// types optionally limits the columns returned (change, mean, min, max, sum,
+// state, last_reset); none means all of them.
+func (c *WebsocketClient) StatisticsDuringPeriod(start, end time.Time, statisticIDs []string, period string, types ...string) (map[string]any, error) {
 	if len(statisticIDs) == 0 {
 		return nil, fmt.Errorf("statistic_ids are required")
 	}
@@ -814,6 +926,9 @@ func (c *WebsocketClient) StatisticsDuringPeriod(start, end time.Time, statistic
 	}
 	if !end.IsZero() {
 		fields["end_time"] = end.UTC().Format(time.RFC3339)
+	}
+	if len(types) > 0 {
+		fields["types"] = types
 	}
 	resp, err := c.wsCommand("recorder/statistics_during_period", fields)
 	if err != nil {
