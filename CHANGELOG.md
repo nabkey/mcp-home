@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/nabkey/mcp-home/compare/v1.13.0...v2.0.0) (2026-10-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* outcome-driven pass over every integration and the front door ([#58](https://github.com/nabkey/mcp-home/issues/58))
+
+### Features
+
+* outcome-driven pass over every integration and the front door ([#58](https://github.com/nabkey/mcp-home/issues/58)) ([3fb71b8](https://github.com/nabkey/mcp-home/commit/3fb71b8eb5972576cad7a2c320b2dfb44a7cfb2e))
+
 ## [1.13.0](https://github.com/nabkey/mcp-home/compare/v1.12.0...v1.13.0) (2026-09-26)
 
 
