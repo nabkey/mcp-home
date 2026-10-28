@@ -1,6 +1,6 @@
 module github.com/nabkey/mcp-home
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/alecthomas/kong v1.16.1
@@ -9,7 +9,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/sync v0.24.0
-	tailscale.com v1.104.1
+	tailscale.com v1.104.2
 )
 
 require (
